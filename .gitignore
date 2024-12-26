@@ -1,0 +1,5 @@
+.env
+path
+db.sqlite
+.DS_Store
+.idea
