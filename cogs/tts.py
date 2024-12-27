@@ -64,6 +64,9 @@ class TTS(commands.Cog):
             voice_model["is_playing"] = False
             return
 
+        """
+        추후 TTS 음성 처리에서 비동기 처리 필요, 현재는 서버가 단 하나여서 임시로 동기 처리.
+        """
         message = voice_model["tts_queue"].pop(0)
         tts = gTTS(text=message, lang="ko")
         tts_fp = io.BytesIO()
@@ -79,6 +82,7 @@ class TTS(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        await self.bot.process_commands(message)
         if (
             message.author.bot or
             isinstance(message.channel, discord.channel.DMChannel) or
@@ -96,22 +100,6 @@ class TTS(commands.Cog):
 
         if not guild_queue["is_playing"]:
             await self.play_tts(message.guild.id)
-        # voice_channel = message.author.voice.channel
-        # if not message.guild.voice_client:
-        #     vc = await voice_channel.connect()
-        # else:
-        #     vc = message.guild.voice_client
-        #
-        # # TTS 데이터를 메모리 스트림에 저장
-        # tts = gTTS(text=message.content, lang="ko")
-        # tts_fp = io.BytesIO()
-        # tts.write_to_fp(tts_fp)
-        # tts_fp.seek(0)  # 스트림의 시작 위치로 이동
-        #
-        # source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
-        #
-        # vc.play(source, after=lambda e: print(f"재생 완료: {e}"))
-
 
 
 

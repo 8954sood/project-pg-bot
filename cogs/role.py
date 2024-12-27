@@ -12,6 +12,7 @@ class Role(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        await self.bot.process_commands(message)
         if (
             message.author.bot or
             isinstance(message.channel, discord.channel.DMChannel) or
@@ -35,12 +36,12 @@ class Role(commands.Cog):
                     embed=discord.Embed(title="HEX 코드가 아닙니다", description='#FFFFFF 처럼 지원하는 HEX 코드를 적어주세요.',
                                         colour=0xff0000))
 
-            user = await LocalCore.get_user_by_user_id(message.author.id)
+            user = await LocalCore.userDataSource.get_user_by_user_id(message.author.id)
 
             if user is not None:
                 if str(user.rolename) == hexs:
                     return await word.edit(embed=discord.Embed(title="같은 색상 역할을 소지중입니다.", colour=0xff0000))
-                role = message.guild.get_role(int(user['db'][1]))
+                role = message.guild.get_role(int(user.role))
 
                 if len(role.members) == 1:
                     await role.delete()
@@ -54,9 +55,9 @@ class Role(commands.Cog):
                     # await role_check(gu, gu.id)
                     await message.author.add_roles(gu)
                     if user is not None:
-                        await LocalCore.update_user(message.author.id, gu.id, gu.name)
+                        await LocalCore.userDataSource.update_user(message.author.id, gu.id, gu.name)
                     else:
-                        await LocalCore.insert_user(message.author.id, gu.id, gu.name)
+                        await LocalCore.userDataSource.insert_user(message.author.id, gu.id, gu.name)
                     await word.edit(
                         embed=discord.Embed(title="역할 부여 완료", description=f"{gu.mention} 역할이 정상적으로 부여되었습니다.",
                                             colour=0x34e718))
@@ -71,9 +72,9 @@ class Role(commands.Cog):
                 await asyncio.sleep(1)
                 await message.author.add_roles(role)
                 if user is not None:
-                    await LocalCore.update_user(message.author.id, role.id, role.name)
+                    await LocalCore.userDataSource.update_user(message.author.id, role.id, role.name)
                 else:
-                    await LocalCore.insert_user(message.author.id, role.id, role.name)
+                    await LocalCore.userDataSource.insert_user(message.author.id, role.id, role.name)
                 await word.edit(embed=discord.Embed(title="역할 부여 완료", description=f"{role.mention} 역할이 정상적으로 부여되었습니다.",
                                                     colour=0x34e718))
             except commands.MissingPermissions:

@@ -19,7 +19,6 @@ intents.voice_states = True
 discord.opus.load_opus("/opt/homebrew/Cellar/opus/1.5.2/lib/libopus.dylib")
 
 bot = commands.Bot(command_prefix='-', description=description, intents=intents)
-path = "./db.sqlite"
 
 @bot.event
 async def on_ready():
