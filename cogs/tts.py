@@ -3,13 +3,13 @@ import io
 import discord
 from gtts import gTTS
 from discord.ext import commands
-from discord import app_commands, Interaction, VoiceState
-from typing import Dict
+from discord import app_commands, Interaction, VoiceState, TextChannel
+from typing import Dict, List
 import asyncio
 
+from core.local import LocalCore
 from core.model.voice_model import VoiceModel
-
-ttsChannelId = 1270299052617105478
+from core.utile import is_admin
 
 class TTS(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -17,6 +17,17 @@ class TTS(commands.Cog):
         self.queue: Dict[int, VoiceModel] = {}
         # key: GuildId, value: MessageChannelId
         self.messageChannel: Dict[int, int] = {}
+        # key: GuildId, value: MessageChannelId
+        self.defaultChannel: Dict[int, int] = {}
+        asyncio.run_coroutine_threadsafe(self.load_local_default_channel(), self.bot.loop)
+
+
+    async def load_local_default_channel(self):
+        local_default_channels = await LocalCore.ttsDataSource.get_all()
+        for i in local_default_channels:
+            self.defaultChannel[i.guild_id] = i.channel_id
+        print("로컬에서 TTS 기본 채널 불러옴.")
+        print(self.defaultChannel)
 
     async def clear_guild_queue(self, guild_id: int):
         if self.queue.get(guild_id) is not None:
@@ -24,6 +35,17 @@ class TTS(commands.Cog):
             await self.queue[guild_id]["vc"].disconnect()
         self.queue.pop(guild_id, None)
         self.messageChannel.pop(guild_id, None)
+
+    @app_commands.command()
+    @is_admin()
+    async def set_default_channel(self, ctx: Interaction, channel: TextChannel):
+        self.defaultChannel[ctx.guild.id] = channel.id
+        local_tts_info = await LocalCore.ttsDataSource.get(ctx.guild.id)
+        if local_tts_info is None:
+            await LocalCore.ttsDataSource.insert(ctx.guild.id, channel.id)
+        else:
+            await LocalCore.ttsDataSource.update(ctx.guild.id, channel.id)
+        await ctx.response.send_message(f"TTS 수신 채널이 {channel.mention}로 설정되었습니다.", ephemeral=True)
 
     @app_commands.command()
     async def join(self, ctx: Interaction):
@@ -48,7 +70,7 @@ class TTS(commands.Cog):
             "is_playing": False,
         }
         self.messageChannel[ctx.guild.id] = ctx.channel.id
-        await ctx.response.send_message("해당 채널에서 TTS를 수신할게요!")
+        await ctx.response.send_message("해당 채널에서도 TTS를 수신할게요!")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: VoiceState, after: VoiceState):
@@ -86,11 +108,30 @@ class TTS(commands.Cog):
         if (
             message.author.bot or
             isinstance(message.channel, discord.channel.DMChannel) or
-            not message.channel.id in self.messageChannel.values()
+            (
+                not message.channel.id in self.messageChannel.values() and
+                not message.channel.id in self.defaultChannel.values()
+            )
         ): return
 
         if message.author.voice is None:
             return
+
+        if self.queue.get(message.guild.id, None) is None:
+            await self.clear_guild_queue(message.guild.id)
+
+            if not message.guild.voice_client:
+                vc = await message.author.voice.channel.connect()
+            else:
+                vc = message.guild.voice_client
+
+            self.queue[message.guild.id] = {
+                "guild_id": message.guild.id,
+                "voice_channel_id": message.author.voice.channel.id,
+                "tts_queue": [],
+                "vc": vc,
+                "is_playing": False,
+            }
 
         guild_queue = self.queue[message.guild.id]
         if message.author.voice.channel.id != guild_queue["voice_channel_id"]:

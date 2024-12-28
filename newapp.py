@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 import os
 import ctypes.util
 
+from core.local import LocalCore
+
 load_dotenv()
 description = '''made 바비호바#6800'''
 
@@ -22,7 +24,8 @@ bot = commands.Bot(command_prefix='-', description=description, intents=intents)
 
 @bot.event
 async def on_ready():
-    bot.db = ""
+    await LocalCore.ttsDataSource.init_table()
+
     for cog in os.listdir("./cogs"):
         if cog.endswith(".py"):
             if cog == "__init__.py":
