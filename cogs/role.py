@@ -17,7 +17,7 @@ class Role(commands.Cog):
             message.author.bot or
             isinstance(message.channel, discord.channel.DMChannel) or
             message.guild.id != 1074259285825032213 or
-            message.channel.id != 1074297167071678516#1077585174323273738
+            message.channel.id != 1077585174323273738
         ): return
 
         word = await message.channel.send(embed=discord.Embed(title="역할을 생성 중입니다."))

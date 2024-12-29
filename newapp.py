@@ -5,6 +5,7 @@ import os
 import ctypes.util
 
 from core.local import LocalCore
+import platform
 
 load_dotenv()
 description = '''made 바비호바#6800'''
@@ -18,7 +19,8 @@ intents.voice_states = True
 
 # Opus 라이브러리 로드
 # opus_path = ctypes.util.find_library("opus")
-discord.opus.load_opus("/opt/homebrew/Cellar/opus/1.5.2/lib/libopus.dylib")
+if platform.system() == "Darwin":
+    discord.opus.load_opus(os.environ.get('OPUS_PATH'))
 
 bot = commands.Bot(command_prefix='-', description=description, intents=intents)
 
