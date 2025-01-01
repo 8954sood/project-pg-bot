@@ -8,7 +8,7 @@ from typing import Dict, List
 import asyncio
 
 from core.local import LocalCore
-from core.model.voice_model import VoiceModel
+from core.model import VoiceModel, TTSQueueModel
 from core.utile import is_admin
 
 class TTS(commands.Cog):
@@ -19,7 +19,10 @@ class TTS(commands.Cog):
         self.messageChannel: Dict[int, int] = {}
         # key: GuildId, value: MessageChannelId
         self.defaultChannel: Dict[int, int] = {}
+        self.voice_option: Dict[int, str] = {}
+
         asyncio.run_coroutine_threadsafe(self.load_local_default_channel(), self.bot.loop)
+        asyncio.run_coroutine_threadsafe(self.load_local_voice_option(), self.bot.loop)
 
 
     async def load_local_default_channel(self):
@@ -28,6 +31,13 @@ class TTS(commands.Cog):
             self.defaultChannel[i.guild_id] = i.channel_id
         print("로컬에서 TTS 기본 채널 불러옴.")
         print(self.defaultChannel)
+
+    async def load_local_voice_option(self):
+        local_voice_options = await LocalCore.voiceOptionDataSource.get_all()
+        for i in local_voice_options:
+            self.voice_option[i.user_id] = i.lang
+        print("로컬에서 TTS 유저 설정 불러옴.")
+        print(self.voice_option)
 
     async def clear_guild_queue(self, guild_id: int):
         if self.queue.get(guild_id) is not None:
@@ -72,6 +82,28 @@ class TTS(commands.Cog):
         self.messageChannel[ctx.guild.id] = ctx.channel.id
         await ctx.response.send_message("해당 채널에서도 TTS를 수신할게요!")
 
+    @app_commands.command()
+    @app_commands.choices(lang=[
+        app_commands.Choice(name='한국어', value="ko"),
+        app_commands.Choice(name='영어', value="en"),
+        app_commands.Choice(name='일본어', value="ja"),
+        app_commands.Choice(name='스페인어', value="es"),
+        app_commands.Choice(name='프랑스어', value="fr"),
+        app_commands.Choice(name='러시아어', value="ru"),
+
+    ])
+    async def voice_option(self, ctx: Interaction, lang: app_commands.Choice[str]):
+        user_voice_option = await LocalCore.voiceOptionDataSource.get_voice_option(ctx.user.id)
+
+        if user_voice_option is None:
+            await LocalCore.voiceOptionDataSource.insert(ctx.user.id, lang.value)
+        else:
+            await LocalCore.voiceOptionDataSource.update(ctx.user.id, lang.value)
+        self.voice_option[ctx.user.id] = lang.value
+
+        await ctx.response.send_message(f"TTS의 음성 설정이 {lang.name}로 변경되었어요.")
+
+
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: VoiceState, after: VoiceState):
         print(member.display_name)
@@ -105,8 +137,9 @@ class TTS(commands.Cog):
         """
         추후 TTS 음성 처리에서 비동기 처리 필요, 현재는 서버가 단 하나여서 임시로 동기 처리.
         """
-        message = voice_model["tts_queue"].pop(0)
-        tts = gTTS(text=message, lang="ko")
+        tts_queue_model: TTSQueueModel = voice_model["tts_queue"].pop(0)
+        user_voice_lang = self.voice_option.get(tts_queue_model["user_id"], "ko")
+        tts = gTTS(text=tts_queue_model["text"], lang=user_voice_lang)
         tts_fp = io.BytesIO()
         tts.write_to_fp(tts_fp)
         tts_fp.seek(0)  # 스트림의 시작 위치로 이동
@@ -153,7 +186,10 @@ class TTS(commands.Cog):
         if message.author.voice.channel.id != guild_queue["voice_channel_id"]:
             return
 
-        guild_queue["tts_queue"].append(message.content)
+        guild_queue["tts_queue"].append({
+            "text": message.content,
+            "user_id": message.author.id,
+        })
 
         if not guild_queue["is_playing"]:
             await self.play_tts(message.guild.id)

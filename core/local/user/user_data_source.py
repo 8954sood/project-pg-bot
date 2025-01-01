@@ -7,6 +7,20 @@ from core.local.user.dto.user import User
 
 
 class UserDataSource:
+
+    @staticmethod
+    async def init_table():
+        async with aiosqlite.connect(db_path) as db:
+            # 테이블 존재 확인 및 생성
+            await db.execute("""
+                            CREATE TABLE IF NOT EXISTS users (
+                                author TEXT PRIMARY KEY,
+                                role TEXT,
+                                rolename TEXT
+                            )
+                        """)
+            await db.commit()
+
     @staticmethod
     async def get_user_by_user_id(userId: int) -> Optional[User]:
         """

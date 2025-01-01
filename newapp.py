@@ -18,7 +18,6 @@ intents.guilds = True
 intents.voice_states = True
 
 # Opus 라이브러리 로드
-# opus_path = ctypes.util.find_library("opus")
 if platform.system() == "Darwin":
     discord.opus.load_opus(os.environ.get('OPUS_PATH'))
 
@@ -26,7 +25,7 @@ bot = commands.Bot(command_prefix='-', description=description, intents=intents)
 
 @bot.event
 async def on_ready():
-    await LocalCore.ttsDataSource.init_table()
+    await LocalCore.init_tables()
 
     for cog in os.listdir("./cogs"):
         if cog.endswith(".py"):

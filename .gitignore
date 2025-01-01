@@ -3,3 +3,4 @@ path
 db.sqlite
 .DS_Store
 .idea
+__pycache__
