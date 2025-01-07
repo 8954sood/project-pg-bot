@@ -148,8 +148,14 @@ class TTS(commands.Cog):
         voice_model["is_playing"] = True
         voice_model["vc"].play(
             source,
-            after=lambda e: asyncio.run_coroutine_threadsafe(self.play_tts(guild_id), self.bot.loop),
+            after=lambda e: asyncio.run_coroutine_threadsafe(self.safe_play_tts(guild_id), self.bot.loop),
         )
+
+    async def safe_play_tts(self, guild_id: int):
+        try:
+            await self.play_tts(guild_id)
+        except Exception as e:
+            print(f"TTS 재생 중 오류 발생: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
