@@ -103,6 +103,12 @@ class TTS(commands.Cog):
 
         await ctx.response.send_message(f"TTS의 음성 설정이 {lang.name}로 변경되었어요.")
 
+    @commands.command()
+    async def check_state(self, ctx: commands.Context):
+        if ctx.author.id != 464712715487805442:
+            return
+
+        return await ctx.send(str(self.queue))
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: VoiceState, after: VoiceState):
