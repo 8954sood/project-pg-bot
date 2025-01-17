@@ -16,6 +16,7 @@ intents.message_content = True
 intents.messages = True
 intents.guilds = True
 intents.voice_states = True
+intents.presences = True
 
 # Opus 라이브러리 로드
 if platform.system() == "Darwin":

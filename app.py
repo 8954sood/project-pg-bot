@@ -15,6 +15,9 @@ description = '''made 바비호바#6800'''
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
+intents.guilds = True
+intents.voice_states = True
+intents.presences = True
 
 bot = commands.Bot(command_prefix='-', description=description, intents=intents)
 path = "./db.sqlite"

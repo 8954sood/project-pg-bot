@@ -19,6 +19,8 @@ class TTS(commands.Cog):
         self.messageChannel: Dict[int, int] = {}
         # key: GuildId, value: MessageChannelId
         self.defaultChannel: Dict[int, int] = {}
+        # Key: DmChannelID, value: GuildId
+        self.dmChannel: Dict[int, int] = {}
         self.voice_option: Dict[int, str] = {}
 
         asyncio.run_coroutine_threadsafe(self.load_local_default_channel(), self.bot.loop)
@@ -45,6 +47,9 @@ class TTS(commands.Cog):
             await self.queue[guild_id]["vc"].disconnect()
         self.queue.pop(guild_id, None)
         self.messageChannel.pop(guild_id, None)
+        for key, value in self.dmChannel.values():
+            if value == guild_id:
+                del self.dmChannel[key]
 
     @app_commands.command()
     @is_admin()
@@ -110,6 +115,20 @@ class TTS(commands.Cog):
 
         return await ctx.send(str(self.queue))
 
+    @app_commands.command(name="dm설정")
+    async def dm_setting(self, ctx: Interaction):
+        if (
+            ctx.guild is None or
+            self.queue.get(ctx.guild.id, None) is None
+        ):
+            return await ctx.response.send_message("해당 설정은 TTS가 사용중인 길드에서만 가능합니다.")
+
+        channel = await ctx.user.create_dm()
+        self.dmChannel[channel.id] = ctx.guild.id
+        await channel.send("TTS를 해당 DM 채널에서도 수신할게요!")
+        return await ctx.response.send_message("설정이 완료되었습니다! DM 채널에서 사용해보세요!", ephemeral=True)
+
+
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: VoiceState, after: VoiceState):
         print(member.display_name)
@@ -126,6 +145,13 @@ class TTS(commands.Cog):
             ):
                 return await self.queue[member.guild.id]["vc"].disconnect()
 
+            if (
+                member.id == self.bot.user.id and
+                after.channel is not None
+            ):
+                self.queue[member.guild.id]["voice_channel_id"] = after.channel.id
+
+
             # 유저가 채널을 나갈 경우, 봇이 해당 채널에 있는지 확인 후 나가기.
             join_member_list = before.channel.members
             if (
@@ -137,7 +163,6 @@ class TTS(commands.Cog):
     async def play_tts(self, guild_id: int):
         voice_model = self.queue[guild_id]
         if len(voice_model["tts_queue"]) == 0:
-            voice_model["is_playing"] = False
             return
 
         """
@@ -151,7 +176,6 @@ class TTS(commands.Cog):
         tts_fp.seek(0)  # 스트림의 시작 위치로 이동
 
         source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
-        voice_model["is_playing"] = True
         voice_model["vc"].play(
             source,
             after=lambda e: asyncio.run_coroutine_threadsafe(self.safe_play_tts(guild_id), self.bot.loop),
@@ -168,12 +192,45 @@ class TTS(commands.Cog):
         await self.bot.process_commands(message)
         if (
             message.author.bot or
-            isinstance(message.channel, discord.channel.DMChannel) or
             (
                 not message.channel.id in self.messageChannel.values() and
-                not message.channel.id in self.defaultChannel.values()
+                not message.channel.id in self.defaultChannel.values() and
+                not message.channel.id in self.dmChannel.keys()
             )
         ): return
+
+        # if self.dmChannel.get(message.channel.id, None) is not None:
+        if isinstance(message.channel, discord.channel.DMChannel):
+            print("성공적 들어옴")
+            guild_id = self.dmChannel.get(message.channel.id, None)
+            if guild_id is None:
+                del self.dmChannel[message.channel.id]
+                return
+            guild_queue = self.queue[guild_id]
+
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+
+            member = guild.get_member(message.author.id)
+            if not member:
+                member = await guild.fetch_member(message.author.id)
+
+            if member.voice is None:
+                del self.dmChannel[message.channel.id]
+                return
+
+            if member.voice.channel.id != guild_queue["voice_channel_id"]:
+                return
+
+            guild_queue["tts_queue"].append({
+                "text": message.content,
+                "user_id": message.author.id,
+            })
+
+            if not guild_queue["vc"].is_playing():
+                await self.play_tts(guild_id)
+            return
 
         if message.author.voice is None:
             return
@@ -191,7 +248,6 @@ class TTS(commands.Cog):
                 "voice_channel_id": message.author.voice.channel.id,
                 "tts_queue": [],
                 "vc": vc,
-                "is_playing": False,
             }
 
         guild_queue = self.queue[message.guild.id]
@@ -203,7 +259,7 @@ class TTS(commands.Cog):
             "user_id": message.author.id,
         })
 
-        if not guild_queue["is_playing"]:
+        if not guild_queue["vc"].is_playing():
             await self.play_tts(message.guild.id)
 
 

@@ -10,4 +10,3 @@ class VoiceModel(TypedDict):
     voice_channel_id: int
     tts_queue: List[TTSQueueModel]
     vc: VoiceClient
-    is_playing: bool
