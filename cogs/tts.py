@@ -47,7 +47,7 @@ class TTS(commands.Cog):
             await self.queue[guild_id]["vc"].disconnect()
         self.queue.pop(guild_id, None)
         self.messageChannel.pop(guild_id, None)
-        for key, value in self.dmChannel.values():
+        for key, value in self.dmChannel.items():
             if value == guild_id:
                 del self.dmChannel[key]
 
@@ -70,7 +70,9 @@ class TTS(commands.Cog):
             await ctx.response.send_message("채널에 입장 후 사용해주세요.")
             return
 
-        await self.clear_guild_queue(ctx.guild.id)
+        if ctx.guild.voice_client is None or ctx.guild.voice_client.channel.id != ctx.user.voice.channel.id:
+            await self.clear_guild_queue(ctx.guild.id)
+
 
         if not ctx.guild.voice_client:
             vc = await ctx.user.voice.channel.connect()
