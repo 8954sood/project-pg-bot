@@ -7,7 +7,7 @@ import re
 from core.local.local_core import LocalCore
 
 GUILD_ID = 1074259285825032213
-HEX_CHANNEL_ID = 1074297167071678516  # 헥스코드 입력 전용 채널 ID
+HEX_CHANNEL_ID = 1077585174323273738  # 헥스코드 입력 전용 채널 ID
 REFERENCE_ROLE_ID = 1077942162257354822  # 기준 역할의 ID (이 역할 바로 아래에 새 역할 생성)
 
 class Role(commands.Cog):
