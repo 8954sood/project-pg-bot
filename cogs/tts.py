@@ -226,7 +226,7 @@ class TTS(commands.Cog):
                 return
 
             guild_queue["tts_queue"].append({
-                "text": message.content,
+                "text": message.clean_content,
                 "user_id": message.author.id,
             })
 
@@ -257,7 +257,7 @@ class TTS(commands.Cog):
             return
 
         guild_queue["tts_queue"].append({
-            "text": message.content,
+            "text": message.clean_content,
             "user_id": message.author.id,
         })
 
