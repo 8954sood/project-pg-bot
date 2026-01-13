@@ -188,6 +188,36 @@ class TTS(commands.Cog):
             await self.play_tts(guild_id)
         except Exception as e:
             print(f"TTS 재생 중 오류 발생: {e}")
+            
+    def _has_image_attachment(self, message: discord.Message) -> bool:
+        for attachment in message.attachments:
+            content_type = attachment.content_type or ""
+            if content_type.startswith("image/"):
+                return True
+            filename = (attachment.filename or "").lower()
+            if filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                return True
+        return False
+
+    def _normalize_tts_text(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped and all(ch == "." for ch in stripped):
+            count = min(3, stripped.count("."))
+            return "점" * count
+        if stripped and all(ch == "?" for ch in stripped):
+            count = min(3, stripped.count("?"))
+            return "물음표" * count
+        return text.replace("?", "물음표").replace(".", "(점)")
+
+    def _build_tts_text(self, message: discord.Message) -> str:
+        text = self._normalize_tts_text(message.clean_content or "")
+        if self._has_image_attachment(message):
+            if text:
+                return f"(이미지){text}"
+            return "(이미지)"
+        return text
+
+
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -225,15 +255,18 @@ class TTS(commands.Cog):
             if member.voice.channel.id != guild_queue["voice_channel_id"]:
                 return
 
+            tts_text = self._build_tts_text(message)
+            if not tts_text:
+                return
+
             guild_queue["tts_queue"].append({
-                "text": message.clean_content,
+                "text": tts_text,
                 "user_id": message.author.id,
             })
-
             if not guild_queue["vc"].is_playing():
                 await self.play_tts(guild_id)
             return
-
+        
         if message.author.voice is None:
             return
 
@@ -256,16 +289,15 @@ class TTS(commands.Cog):
         if message.author.voice.channel.id != guild_queue["voice_channel_id"]:
             return
 
+        tts_text = self._build_tts_text(message)
+        if not tts_text:
+            return
+
         guild_queue["tts_queue"].append({
-            "text": message.clean_content,
+            "text": tts_text,
             "user_id": message.author.id,
         })
-
         if not guild_queue["vc"].is_playing():
             await self.play_tts(message.guild.id)
-
-
-
-
 async def setup(bot: commands.Bot):
     await bot.add_cog(TTS(bot))
