@@ -1,15 +1,17 @@
-import io
+import os
 
 import discord
-from gtts import gTTS
 from discord.ext import commands
 from discord import app_commands, Interaction, VoiceState, TextChannel, Member
-from typing import Dict, List
+from typing import Dict, List, Optional, Set
 import asyncio
 
 from core.local import LocalCore
 from core.model import VoiceModel, TTSQueueModel
 from core.utile import is_admin
+from core.tts_engines.gtts_engine import GTTSEngine
+from core.tts_engines.ai_stream_engine import AIStreamEngine
+from core.local.ttsengine.dto import TTSEngineOption
 
 class TTS(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -22,9 +24,17 @@ class TTS(commands.Cog):
         # Key: DmChannelID, value: GuildId
         self.dmChannel: Dict[int, int] = {}
         self.voice_option: Dict[int, str] = {}
+        self.tts_engine_option: Dict[int, TTSEngineOption] = {}
+        self.tts_engine_allow: Set[int] = set()
+
+        self.gtts_engine = GTTSEngine(lambda user_id: self.voice_option.get(user_id, "ko"))
+        self.ai_ws_url = os.environ.get("AI_TTS_WS_URL", "")
+        self.ai_engine = AIStreamEngine(ai_ws_url=self.ai_ws_url) if self.ai_ws_url else None
 
         asyncio.run_coroutine_threadsafe(self.load_local_default_channel(), self.bot.loop)
         asyncio.run_coroutine_threadsafe(self.load_local_voice_option(), self.bot.loop)
+        asyncio.run_coroutine_threadsafe(self.load_local_tts_engine_option(), self.bot.loop)
+        asyncio.run_coroutine_threadsafe(self.load_local_tts_engine_allow(), self.bot.loop)
 
 
     async def load_local_default_channel(self):
@@ -41,6 +51,15 @@ class TTS(commands.Cog):
         print("로컬에서 TTS 유저 설정 불러옴.")
         print(self.voice_option)
 
+    async def load_local_tts_engine_option(self):
+        local_engine_options = await LocalCore.ttsEngineOptionDataSource.get_all()
+        for i in local_engine_options:
+            self.tts_engine_option[i.user_id] = i
+
+    async def load_local_tts_engine_allow(self):
+        local_allow = await LocalCore.ttsEngineAllowDataSource.get_all()
+        self.tts_engine_allow = set([i.user_id for i in local_allow])
+
     async def clear_guild_queue(self, guild_id: int):
         if self.queue.get(guild_id) is not None:
             self.queue[guild_id]["vc"].stop()
@@ -50,6 +69,32 @@ class TTS(commands.Cog):
         for key, value in self.dmChannel.items():
             if value == guild_id:
                 del self.dmChannel[key]
+
+    def _ensure_guild_state(self, guild: discord.Guild) -> Optional[VoiceModel]:
+        existing = self.queue.get(guild.id)
+        if existing and existing.get("vc") and existing["vc"].is_connected():
+            return existing
+
+        vc = guild.voice_client
+        if vc is None:
+            return None
+
+        self.queue[guild.id] = {
+            "guild_id": guild.id,
+            "voice_channel_id": vc.channel.id if vc.channel else 0,
+            "tts_queue": [],
+            "vc": vc,
+        }
+        return self.queue[guild.id]
+
+    def _get_user_engine(self, user_id: int) -> tuple:
+        option = self.tts_engine_option.get(user_id)
+        if option is None:
+            return "gtts", None
+        return option.engine, option.model_name
+
+    def _is_engine_change_allowed(self, user_id: int) -> bool:
+        return user_id in self.tts_engine_allow
 
     @app_commands.command()
     @is_admin()
@@ -110,12 +155,57 @@ class TTS(commands.Cog):
 
         await ctx.response.send_message(f"TTS의 음성 설정이 {lang.name}로 변경되었어요.")
 
+    @app_commands.command(name="tts_engine")
+    @app_commands.choices(engine=[
+        app_commands.Choice(name="gtts", value="gtts"),
+        app_commands.Choice(name="ai", value="ai"),
+    ])
+    async def tts_engine(self, ctx: Interaction, engine: app_commands.Choice[str], model_name: Optional[str] = None):
+        if not self._is_engine_change_allowed(ctx.user.id):
+            return await ctx.response.send_message("You are not allowed to change TTS engine.", ephemeral=True)
+
+        if engine.value == "ai" and not model_name:
+            return await ctx.response.send_message("AI engine requires model_name.", ephemeral=True)
+
+        model_to_save = model_name if engine.value == "ai" else None
+        await LocalCore.ttsEngineOptionDataSource.upsert(ctx.user.id, engine.value, model_to_save)
+        self.tts_engine_option[ctx.user.id] = TTSEngineOption(
+            user_id=ctx.user.id,
+            engine=engine.value,
+            model_name=model_to_save,
+        )
+        await ctx.response.send_message("TTS engine updated.", ephemeral=True)
+
     @commands.command()
     async def check_state(self, ctx: commands.Context):
         if ctx.author.id != 464712715487805442:
             return
 
         return await ctx.send(str(self.queue))
+
+    @commands.command(name="tts_allow")
+    @commands.is_owner()
+    async def tts_allow(self, ctx: commands.Context, action: str, user: Optional[discord.User] = None):
+        action = (action or "").lower()
+
+        if action == "list":
+            if not self.tts_engine_allow:
+                return await ctx.send("No users are allowed to change TTS engine.")
+            allowed_ids = sorted(self.tts_engine_allow)
+            return await ctx.send("Allowed users: " + ", ".join(str(uid) for uid in allowed_ids))
+
+        if action in ("add", "remove"):
+            if user is None:
+                return await ctx.send("Usage: -tts_allow add|remove <user>")
+            if action == "add":
+                await LocalCore.ttsEngineAllowDataSource.add(user.id)
+                self.tts_engine_allow.add(user.id)
+                return await ctx.send(f"Allowed: {user.id}")
+            await LocalCore.ttsEngineAllowDataSource.remove(user.id)
+            self.tts_engine_allow.discard(user.id)
+            return await ctx.send(f"Removed: {user.id}")
+
+        return await ctx.send("Usage: -tts_allow add|remove <user> | -tts_allow list")
 
     @app_commands.command(name="dm설정")
     async def dm_setting(self, ctx: Interaction):
@@ -145,13 +235,18 @@ class TTS(commands.Cog):
                 member.id == self.bot.user.id and
                 sum(1 for member in after.channel.members if not member.bot) == 0
             ):
-                return await self.queue[member.guild.id]["vc"].disconnect()
+                guild_queue = self.queue.get(member.guild.id)
+                if guild_queue and guild_queue.get("vc"):
+                    return await guild_queue["vc"].disconnect()
+                return
 
             if (
                 member.id == self.bot.user.id and
                 after.channel is not None
             ):
-                self.queue[member.guild.id]["voice_channel_id"] = after.channel.id
+                guild_queue = self.queue.get(member.guild.id)
+                if guild_queue:
+                    guild_queue["voice_channel_id"] = after.channel.id
 
 
             # 유저가 채널을 나갈 경우, 봇이 해당 채널에 있는지 확인 후 나가기.
@@ -160,24 +255,43 @@ class TTS(commands.Cog):
                 self.bot.user.id in list(map(lambda x: x.id, join_member_list)) and
                 sum(1 for member in join_member_list if not member.bot) == 0
             ):
-                return await self.queue[member.guild.id]["vc"].disconnect()
+                guild_queue = self.queue.get(member.guild.id)
+                if guild_queue and guild_queue.get("vc"):
+                    return await guild_queue["vc"].disconnect()
+                return
 
     async def play_tts(self, guild_id: int):
         voice_model = self.queue[guild_id]
         if len(voice_model["tts_queue"]) == 0:
+            return
+        if voice_model["vc"].is_playing():
             return
 
         """
         추후 TTS 음성 처리에서 비동기 처리 필요, 현재는 서버가 단 하나여서 임시로 동기 처리.
         """
         tts_queue_model: TTSQueueModel = voice_model["tts_queue"].pop(0)
-        user_voice_lang = self.voice_option.get(tts_queue_model["user_id"], "ko")
-        tts = gTTS(text=tts_queue_model["text"], lang=user_voice_lang)
-        tts_fp = io.BytesIO()
-        tts.write_to_fp(tts_fp)
-        tts_fp.seek(0)  # 스트림의 시작 위치로 이동
+        engine, model_name = self._get_user_engine(tts_queue_model["user_id"])
 
-        source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
+        if engine == "ai":
+            if self.ai_engine and model_name:
+                try:
+                    source = await self.ai_engine.create_discord_source(
+                        text=tts_queue_model["text"],
+                        model_name=model_name,
+                    )
+                except Exception as e:
+                    print(f"AI engine failed. Falling back to gTTS: {e}")
+                    engine = "gtts"
+            else:
+                print("AI engine unavailable or model missing. Falling back to gTTS.")
+                engine = "gtts"
+        if engine == "gtts":
+            tts_fp = await self.gtts_engine.synth(
+                text=tts_queue_model["text"],
+                user_id=tts_queue_model["user_id"],
+            )
+            source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
         voice_model["vc"].play(
             source,
             after=lambda e: asyncio.run_coroutine_threadsafe(self.safe_play_tts(guild_id), self.bot.loop),
@@ -233,15 +347,17 @@ class TTS(commands.Cog):
 
         # if self.dmChannel.get(message.channel.id, None) is not None:
         if isinstance(message.channel, discord.channel.DMChannel):
-            print("성공적 들어옴")
+            print("dm message received")
             guild_id = self.dmChannel.get(message.channel.id, None)
             if guild_id is None:
                 del self.dmChannel[message.channel.id]
                 return
-            guild_queue = self.queue[guild_id]
-
             guild = self.bot.get_guild(guild_id)
             if guild is None:
+                return
+
+            guild_queue = self._ensure_guild_state(guild)
+            if guild_queue is None:
                 return
 
             member = guild.get_member(message.author.id)
@@ -271,19 +387,21 @@ class TTS(commands.Cog):
             return
 
         if self.queue.get(message.guild.id, None) is None:
-            await self.clear_guild_queue(message.guild.id)
+            guild_queue = self._ensure_guild_state(message.guild)
+            if guild_queue is None:
+                await self.clear_guild_queue(message.guild.id)
 
-            if not message.guild.voice_client:
-                vc = await message.author.voice.channel.connect()
-            else:
-                vc = message.guild.voice_client
+                if not message.guild.voice_client:
+                    vc = await message.author.voice.channel.connect()
+                else:
+                    vc = message.guild.voice_client
 
-            self.queue[message.guild.id] = {
-                "guild_id": message.guild.id,
-                "voice_channel_id": message.author.voice.channel.id,
-                "tts_queue": [],
-                "vc": vc,
-            }
+                self.queue[message.guild.id] = {
+                    "guild_id": message.guild.id,
+                    "voice_channel_id": message.author.voice.channel.id,
+                    "tts_queue": [],
+                    "vc": vc,
+                }
 
         guild_queue = self.queue[message.guild.id]
         if message.author.voice.channel.id != guild_queue["voice_channel_id"]:
@@ -299,5 +417,6 @@ class TTS(commands.Cog):
         })
         if not guild_queue["vc"].is_playing():
             await self.play_tts(message.guild.id)
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(TTS(bot))
