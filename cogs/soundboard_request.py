@@ -2,6 +2,7 @@ import base64
 import os
 import subprocess
 import tempfile
+from collections import OrderedDict
 from typing import Optional
 
 import discord
@@ -34,7 +35,7 @@ class SoundboardReviewView(discord.ui.View):
 class SoundboardRequest(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.forwarded_messages: set[int] = set()
+        self.forwarded_messages: OrderedDict[int, None] = OrderedDict()
 
     @staticmethod
     def _is_admin(member: discord.abc.User) -> bool:
@@ -95,7 +96,9 @@ class SoundboardRequest(commands.Cog):
 
         view = SoundboardReviewView(self, message.channel.id, message.id)
         await admin_channel.send(embed=embed, view=view)
-        self.forwarded_messages.add(message.id)
+        self.forwarded_messages[message.id] = None
+        if len(self.forwarded_messages) > 1000:
+            self.forwarded_messages.popitem(last=False)
 
     async def _fetch_source_message(self, channel_id: int, message_id: int) -> Optional[discord.Message]:
         channel = self.bot.get_channel(channel_id)
@@ -162,6 +165,8 @@ class SoundboardRequest(commands.Cog):
     async def handle_accept(self, interaction: discord.Interaction, source_channel_id: int, source_message_id: int):
         if not self._is_admin(interaction.user):
             return await interaction.response.send_message("관리자만 처리할 수 있습니다.", ephemeral=True)
+        if interaction.guild is None:
+            return await interaction.response.send_message("길드에서만 처리할 수 있습니다.", ephemeral=True)
 
         source_message = await self._fetch_source_message(source_channel_id, source_message_id)
         if source_message is None:
@@ -190,16 +195,17 @@ class SoundboardRequest(commands.Cog):
         except discord.HTTPException as exc:
             return await interaction.response.send_message(f"사운드보드 업로드 실패: {exc}", ephemeral=True)
 
-        await interaction.response.edit_message(content="수락 처리되었습니다.", embed=interaction.message.embeds[0], view=None)
+        embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
+        await interaction.response.edit_message(content="수락 처리되었습니다.", embed=embed, view=None)
 
     async def handle_reject(self, interaction: discord.Interaction):
         if not self._is_admin(interaction.user):
             return await interaction.response.send_message("관리자만 처리할 수 있습니다.", ephemeral=True)
-        await interaction.response.edit_message(content="거절 처리되었습니다.", embed=interaction.message.embeds[0], view=None)
+        embed = interaction.message.embeds[0] if interaction.message and interaction.message.embeds else None
+        await interaction.response.edit_message(content="거절 처리되었습니다.", embed=embed, view=None)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        await self.bot.process_commands(message)
         if (
             message.author.bot or
             not isinstance(message.channel, discord.TextChannel) or
@@ -262,7 +268,7 @@ class SoundboardRequest(commands.Cog):
         if not self._is_valid_request_message(message):
             return
 
-        if await self._count_human_thumbs_up(message) > 5:
+        if await self._count_human_thumbs_up(message) >= 6:
             await self._forward_for_review(message)
 
 
