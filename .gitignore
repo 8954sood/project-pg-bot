@@ -1,6 +1,7 @@
 .env
 path
 db.sqlite
+soundboard_forwarded_messages.json
 .DS_Store
 .idea
 __pycache__
