@@ -1,13 +1,51 @@
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import os
 import ctypes.util
+import logging
+import os
 
 from core.local import LocalCore
 import platform
 
+
+class ContextFormatter(logging.Formatter):
+    context_fields = (
+        "guild_id",
+        "channel_id",
+        "voice_channel_id",
+        "before_voice_channel_id",
+        "after_voice_channel_id",
+        "user_id",
+        "tts_engine",
+        "ai_model",
+        "queue_size",
+        "fallback",
+        "reason",
+        "text_length",
+        "text_preview",
+    )
+
+    def format(self, record):
+        message = super().format(record)
+        context = " ".join(
+            f"{field}={getattr(record, field)!r}"
+            for field in self.context_fields
+            if hasattr(record, field)
+        )
+        return f"{message} {context}" if context else message
+
+
 load_dotenv()
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
+for handler in logging.getLogger().handlers:
+    handler.setFormatter(
+        ContextFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+logger = logging.getLogger(__name__)
 description = '''made 바비호바#6800'''
 
 intents = discord.Intents.default()
@@ -34,14 +72,13 @@ async def on_ready():
                 continue
             try:
                 await bot.load_extension(f'cogs.{cog.lower()[:-3]}')
-                print(f'{cog} cog loaded.')
-            except Exception as e:
-                print(f'Failed to load {cog} cog: {e}')
+                logger.info("Cog loaded: %s", cog)
+            except Exception:
+                logger.exception("Failed to load cog: %s", cog)
 
     bot.tree.copy_global_to(guild=discord.Object(id=1074259285825032213))
     await bot.tree.sync()
-    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-    print('------')
+    logger.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
 
 
 token = os.environ.get('BOT_TOKEN')
