@@ -1,22 +1,27 @@
+import asyncio
+import logging
 import os
+from typing import Dict, Optional, Set, Tuple
 
 import discord
-from discord.ext import commands
 from discord import app_commands, Interaction, VoiceState, TextChannel, Member
-from typing import Dict, List, Optional, Set
-import asyncio
+from discord.ext import commands
 
 from core.local import LocalCore
 from core.model import VoiceModel, TTSQueueModel
-from core.utile import is_admin
-from core.tts_engines.gtts_engine import GTTSEngine
 from core.tts_engines.ai_stream_engine import AIStreamEngine
+from core.tts_engines.gtts_engine import GTTSEngine
 from core.local.ttsengine.dto import TTSEngineOption
+from core.utile import is_admin
+
+logger = logging.getLogger(__name__)
+
 
 class TTS(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.queue: Dict[int, VoiceModel] = {}
+        self.play_locks: Dict[int, asyncio.Lock] = {}
         # key: GuildId, value: MessageChannelId
         self.messageChannel: Dict[int, int] = {}
         # key: GuildId, value: MessageChannelId
@@ -30,6 +35,9 @@ class TTS(commands.Cog):
         self.gtts_engine = GTTSEngine(lambda user_id: self.voice_option.get(user_id, "ko"))
         self.ai_ws_url = os.environ.get("AI_TTS_WS_URL", "")
         self.ai_engine = AIStreamEngine(ai_ws_url=self.ai_ws_url) if self.ai_ws_url else None
+        self.max_queue_size = int(os.getenv("TTS_MAX_QUEUE_SIZE", "50"))
+        self.max_text_length = int(os.getenv("TTS_MAX_TEXT_LENGTH", "300"))
+        self.gtts_timeout = float(os.getenv("TTS_GTTS_TIMEOUT_SECONDS", "10"))
 
         asyncio.run_coroutine_threadsafe(self.load_local_default_channel(), self.bot.loop)
         asyncio.run_coroutine_threadsafe(self.load_local_voice_option(), self.bot.loop)
@@ -41,15 +49,13 @@ class TTS(commands.Cog):
         local_default_channels = await LocalCore.ttsDataSource.get_all()
         for i in local_default_channels:
             self.defaultChannel[i.guild_id] = i.channel_id
-        print("로컬에서 TTS 기본 채널 불러옴.")
-        print(self.defaultChannel)
+        logger.info("Loaded local TTS default channels", extra={"channel_count": len(self.defaultChannel)})
 
     async def load_local_voice_option(self):
         local_voice_options = await LocalCore.voiceOptionDataSource.get_all()
         for i in local_voice_options:
             self.voice_option[i.user_id] = i.lang
-        print("로컬에서 TTS 유저 설정 불러옴.")
-        print(self.voice_option)
+        logger.info("Loaded local TTS voice options", extra={"user_count": len(self.voice_option)})
 
     async def load_local_tts_engine_option(self):
         local_engine_options = await LocalCore.ttsEngineOptionDataSource.get_all()
@@ -60,15 +66,76 @@ class TTS(commands.Cog):
         local_allow = await LocalCore.ttsEngineAllowDataSource.get_all()
         self.tts_engine_allow = set([i.user_id for i in local_allow])
 
-    async def clear_guild_queue(self, guild_id: int):
-        if self.queue.get(guild_id) is not None:
-            self.queue[guild_id]["vc"].stop()
-            await self.queue[guild_id]["vc"].disconnect()
+    async def clear_guild_queue(self, guild_id: int, *, reason: str = "unknown"):
+        voice_model = self.queue.get(guild_id)
+        vc = voice_model.get("vc") if voice_model else None
+        queue_size = len(voice_model["tts_queue"]) if voice_model else 0
+        logger.info(
+            "Clearing guild TTS queue",
+            extra={"guild_id": guild_id, "queue_size": queue_size, "reason": reason},
+        )
+
+        # Remove routing state first so a stop-triggered playback callback cannot
+        # start another queued item while disconnect is in progress.
         self.queue.pop(guild_id, None)
         self.messageChannel.pop(guild_id, None)
-        for key, value in self.dmChannel.items():
-            if value == guild_id:
-                del self.dmChannel[key]
+        for key in [key for key, value in self.dmChannel.items() if value == guild_id]:
+            self.dmChannel.pop(key, None)
+
+        if vc is not None:
+            try:
+                if vc.is_playing():
+                    vc.stop()
+            except Exception:
+                logger.exception(
+                    "Voice playback stop failed",
+                    extra={"guild_id": guild_id, "reason": reason},
+                )
+
+            try:
+                if vc.is_connected():
+                    logger.info(
+                        "Voice disconnect starting",
+                        extra={"guild_id": guild_id, "reason": reason},
+                    )
+                    await vc.disconnect()
+                    logger.info(
+                        "Voice disconnect completed",
+                        extra={"guild_id": guild_id, "reason": reason},
+                    )
+            except Exception:
+                logger.exception(
+                    "Voice disconnect failed",
+                    extra={"guild_id": guild_id, "reason": reason},
+                )
+
+        self._discard_play_lock(guild_id)
+
+    def _discard_play_lock(self, guild_id: int) -> None:
+        lock = self.play_locks.get(guild_id)
+        if lock is None:
+            return
+        if not lock.locked():
+            self.play_locks.pop(guild_id, None)
+            return
+
+        async def discard_after_release(expected_lock: asyncio.Lock) -> None:
+            async with expected_lock:
+                pass
+            if (
+                self.play_locks.get(guild_id) is expected_lock
+                and guild_id not in self.queue
+            ):
+                self.play_locks.pop(guild_id, None)
+
+        asyncio.create_task(discard_after_release(lock))
+
+    def _get_play_lock(self, guild_id: int) -> asyncio.Lock:
+        lock = self.play_locks.get(guild_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.play_locks[guild_id] = lock
+        return lock
 
     def _ensure_guild_state(self, guild: discord.Guild) -> Optional[VoiceModel]:
         existing = self.queue.get(guild.id)
@@ -96,6 +163,205 @@ class TTS(commands.Cog):
     def _is_engine_change_allowed(self, user_id: int) -> bool:
         return user_id in self.tts_engine_allow
 
+    async def _create_tts_source(
+        self,
+        *,
+        guild_id: int,
+        queue_item: TTSQueueModel,
+    ) -> Tuple[discord.AudioSource, str]:
+        user_id = queue_item["user_id"]
+        text = queue_item["text"]
+        engine, model_name = self._get_user_engine(user_id)
+        logger.debug(
+            "TTS source creation starting",
+            extra={
+                "guild_id": guild_id,
+                "user_id": user_id,
+                "tts_engine": engine,
+                "ai_model": model_name,
+                "text_length": len(text),
+            },
+        )
+
+        if engine == "ai":
+            if self.ai_engine and model_name:
+                try:
+                    source = await self.ai_engine.create_discord_source(
+                        text=text,
+                        model_name=model_name,
+                    )
+                    if source is None:
+                        raise RuntimeError("AI TTS returned no audio source")
+                    logger.info(
+                        "TTS source creation succeeded",
+                        extra={
+                            "guild_id": guild_id,
+                            "user_id": user_id,
+                            "tts_engine": "ai",
+                            "ai_model": model_name,
+                            "fallback": False,
+                        },
+                    )
+                    return source, "ai"
+                except Exception:
+                    logger.exception(
+                        "AI TTS failed; falling back to gTTS",
+                        extra={
+                            "guild_id": guild_id,
+                            "user_id": user_id,
+                            "tts_engine": "ai",
+                            "ai_model": model_name,
+                            "fallback": True,
+                        },
+                    )
+            else:
+                logger.warning(
+                    "AI TTS unavailable; falling back to gTTS",
+                    extra={
+                        "guild_id": guild_id,
+                        "user_id": user_id,
+                        "tts_engine": "ai",
+                        "ai_model": model_name,
+                        "fallback": True,
+                    },
+                )
+
+        try:
+            tts_fp = await asyncio.wait_for(
+                self.gtts_engine.synth(
+                    text=text,
+                    user_id=user_id,
+                    timeout=self.gtts_timeout,
+                ),
+                timeout=self.gtts_timeout,
+            )
+            source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
+            if source is None:
+                raise RuntimeError("gTTS returned no audio source")
+            logger.info(
+                "TTS source creation succeeded",
+                extra={
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "tts_engine": "gtts",
+                    "ai_model": model_name,
+                    "fallback": engine == "ai",
+                },
+            )
+            return source, "gtts"
+        except asyncio.TimeoutError as exc:
+            logger.error(
+                "gTTS source creation timed out",
+                extra={
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "tts_engine": "gtts",
+                    "fallback": engine == "ai",
+                },
+            )
+            raise RuntimeError("gTTS source creation timed out") from exc
+        except Exception as exc:
+            logger.exception(
+                "gTTS source creation failed",
+                extra={
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "tts_engine": "gtts",
+                    "fallback": engine == "ai",
+                },
+            )
+            raise RuntimeError("All TTS engines failed") from exc
+
+    def _make_after_callback(self, guild_id: int):
+        def after(error: Optional[Exception]):
+            if error:
+                logger.error(
+                    "TTS playback callback error",
+                    exc_info=(type(error), error, error.__traceback__),
+                    extra={"guild_id": guild_id},
+                )
+            else:
+                logger.info("TTS playback completed", extra={"guild_id": guild_id})
+
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.safe_play_tts(guild_id),
+                    self.bot.loop,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to schedule next TTS playback",
+                    extra={"guild_id": guild_id},
+                )
+                return
+
+            def done_callback(done_future):
+                try:
+                    done_future.result()
+                except Exception:
+                    logger.exception(
+                        "safe_play_tts failed from playback callback",
+                        extra={"guild_id": guild_id},
+                    )
+
+            future.add_done_callback(done_callback)
+
+        return after
+
+    async def _enqueue_tts(
+        self,
+        *,
+        guild_id: int,
+        voice_model: VoiceModel,
+        text: str,
+        user_id: int,
+        channel_id: int,
+    ) -> bool:
+        text = text.strip()
+        if not text:
+            return False
+        if len(text) > self.max_text_length:
+            logger.debug(
+                "TTS text truncated",
+                extra={
+                    "guild_id": guild_id,
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "text_length": len(text),
+                },
+            )
+            if self.max_text_length == 1:
+                text = "…"
+            else:
+                text = f"{text[:self.max_text_length - 1]}…"
+
+        queue_size = len(voice_model["tts_queue"])
+        if queue_size >= self.max_queue_size:
+            logger.warning(
+                "TTS queue full; dropping new message",
+                extra={
+                    "guild_id": guild_id,
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "queue_size": queue_size,
+                },
+            )
+            return False
+
+        voice_model["tts_queue"].append({"text": text, "user_id": user_id})
+        logger.debug(
+            "TTS message queued",
+            extra={
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "queue_size": len(voice_model["tts_queue"]),
+                "text_length": len(text),
+                "text_preview": text[:30],
+            },
+        )
+        return True
+
     @app_commands.command()
     @is_admin()
     async def set_default_channel(self, ctx: Interaction, channel: TextChannel):
@@ -109,30 +375,112 @@ class TTS(commands.Cog):
 
     @app_commands.command()
     async def join(self, ctx: Interaction):
-
-
+        guild_id = ctx.guild.id
+        user_id = ctx.user.id
+        requested_channel_id = ctx.user.voice.channel.id if ctx.user.voice else None
+        logger.info(
+            "TTS join requested",
+            extra={
+                "guild_id": guild_id,
+                "channel_id": ctx.channel.id,
+                "user_id": user_id,
+                "voice_channel_id": requested_channel_id,
+            },
+        )
         if ctx.user.voice is None:
             await ctx.response.send_message("채널에 입장 후 사용해주세요.")
             return
 
-        if ctx.guild.voice_client is None or ctx.guild.voice_client.channel.id != ctx.user.voice.channel.id:
-            await self.clear_guild_queue(ctx.guild.id)
+        previous_vc = ctx.guild.voice_client
+        previous_channel_id = (
+            previous_vc.channel.id
+            if previous_vc is not None and previous_vc.channel is not None
+            else None
+        )
+        if previous_channel_id != ctx.user.voice.channel.id:
+            await self.clear_guild_queue(
+                guild_id,
+                reason="manual_join_other_channel",
+            )
+            if previous_vc is not None:
+                await self._wait_for_voice_client_release(ctx.guild, previous_vc)
 
+        try:
+            current_vc = ctx.guild.voice_client
+            if (
+                current_vc is None
+                or not current_vc.is_connected()
+                or current_vc.channel is None
+                or current_vc.channel.id != ctx.user.voice.channel.id
+            ):
+                vc = await ctx.user.voice.channel.connect()
+                logger.info(
+                    "Voice channel connection succeeded",
+                    extra={
+                        "guild_id": guild_id,
+                        "voice_channel_id": ctx.user.voice.channel.id,
+                        "user_id": user_id,
+                    },
+                )
+            else:
+                vc = ctx.guild.voice_client
+                logger.info(
+                    "Reusing existing voice client",
+                    extra={
+                        "guild_id": guild_id,
+                        "voice_channel_id": vc.channel.id if vc.channel else None,
+                        "user_id": user_id,
+                    },
+                )
+        except Exception:
+            logger.exception(
+                "Voice channel connection failed",
+                extra={
+                    "guild_id": guild_id,
+                    "voice_channel_id": ctx.user.voice.channel.id,
+                    "user_id": user_id,
+                },
+            )
+            await ctx.response.send_message("음성 채널 연결에 실패했습니다.", ephemeral=True)
+            return
 
-        if not ctx.guild.voice_client:
-            vc = await ctx.user.voice.channel.connect()
+        existing = self.queue.get(guild_id)
+        if existing and existing.get("vc") is vc:
+            existing["voice_channel_id"] = ctx.user.voice.channel.id
         else:
-            vc = ctx.guild.voice_client
-
-        self.queue[ctx.guild.id] = {
-            "guild_id": ctx.guild.id,
-            "voice_channel_id": ctx.user.voice.channel.id,
-            "tts_queue": [],
-            "vc": vc,
-            "is_playing": False,
-        }
-        self.messageChannel[ctx.guild.id] = ctx.channel.id
+            self.queue[guild_id] = {
+                "guild_id": guild_id,
+                "voice_channel_id": ctx.user.voice.channel.id,
+                "tts_queue": [],
+                "vc": vc,
+            }
+        self.messageChannel[guild_id] = ctx.channel.id
         await ctx.response.send_message("해당 채널에서도 TTS를 수신할게요!")
+
+    async def _wait_for_voice_client_release(
+        self,
+        guild: discord.Guild,
+        previous_vc: discord.VoiceClient,
+        *,
+        timeout: float = 2.0,
+    ) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while guild.voice_client is previous_vc:
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(
+                    "Timed out waiting for stale voice client release",
+                    extra={"guild_id": guild.id},
+                )
+                if not previous_vc.is_connected():
+                    try:
+                        previous_vc.cleanup()
+                    except Exception:
+                        logger.exception(
+                            "Stale voice client cleanup failed",
+                            extra={"guild_id": guild.id},
+                        )
+                return
+            await asyncio.sleep(0.05)
 
     @app_commands.command()
     @app_commands.choices(lang=[
@@ -223,85 +571,173 @@ class TTS(commands.Cog):
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member: discord.Member, before: VoiceState, after: VoiceState):
-        print(member.display_name)
-        # 이전 상태에 음성 채널이 있고, 이후 상태에서 채널이 None이면 나간 것
-        if before.channel is not None and after.channel is None and member.id == self.bot.user.id:
-            return await self.clear_guild_queue(member.guild.id)
+        guild_id = member.guild.id
+        before_channel_id = before.channel.id if before.channel else None
+        after_channel_id = after.channel.id if after.channel else None
+        logger.debug(
+            "Voice state updated",
+            extra={
+                "guild_id": guild_id,
+                "user_id": member.id,
+                "before_voice_channel_id": before_channel_id,
+                "after_voice_channel_id": after_channel_id,
+            },
+        )
 
-        # 유저가 채널 이동 또는 채널을 나간 경우
+        if before.channel is not None and after.channel is None and member.id == self.bot.user.id:
+            logger.info(
+                "Bot voice disconnect detected",
+                extra={"guild_id": guild_id, "voice_channel_id": before_channel_id},
+            )
+            return await self.clear_guild_queue(guild_id, reason="bot_disconnected")
+
         if before.channel is not None:
             if (
                 after.channel is not None and
                 member.id == self.bot.user.id and
-                sum(1 for member in after.channel.members if not member.bot) == 0
+                sum(1 for channel_member in after.channel.members if not channel_member.bot) == 0
             ):
-                guild_queue = self.queue.get(member.guild.id)
-                if guild_queue and guild_queue.get("vc"):
-                    return await guild_queue["vc"].disconnect()
-                return
+                logger.info(
+                    "Empty voice channel detected after bot move",
+                    extra={"guild_id": guild_id, "voice_channel_id": after_channel_id},
+                )
+                return await self.clear_guild_queue(guild_id, reason="voice_channel_empty")
 
             if (
                 member.id == self.bot.user.id and
                 after.channel is not None
             ):
-                guild_queue = self.queue.get(member.guild.id)
+                logger.info(
+                    "Bot voice channel move detected",
+                    extra={
+                        "guild_id": guild_id,
+                        "before_voice_channel_id": before_channel_id,
+                        "after_voice_channel_id": after_channel_id,
+                    },
+                )
+                guild_queue = self.queue.get(guild_id)
                 if guild_queue:
                     guild_queue["voice_channel_id"] = after.channel.id
 
-
-            # 유저가 채널을 나갈 경우, 봇이 해당 채널에 있는지 확인 후 나가기.
             join_member_list = before.channel.members
             if (
                 self.bot.user.id in list(map(lambda x: x.id, join_member_list)) and
-                sum(1 for member in join_member_list if not member.bot) == 0
+                sum(1 for channel_member in join_member_list if not channel_member.bot) == 0
             ):
-                guild_queue = self.queue.get(member.guild.id)
-                if guild_queue and guild_queue.get("vc"):
-                    return await guild_queue["vc"].disconnect()
-                return
+                logger.info(
+                    "Empty voice channel detected",
+                    extra={"guild_id": guild_id, "voice_channel_id": before_channel_id},
+                )
+                return await self.clear_guild_queue(guild_id, reason="voice_channel_empty")
 
     async def play_tts(self, guild_id: int):
-        voice_model = self.queue[guild_id]
-        if len(voice_model["tts_queue"]) == 0:
-            return
-        if voice_model["vc"].is_playing():
-            return
+        async with self._get_play_lock(guild_id):
+            while True:
+                voice_model = self.queue.get(guild_id)
+                if voice_model is None:
+                    logger.debug("TTS playback skipped: guild state missing", extra={"guild_id": guild_id})
+                    return
 
-        """
-        추후 TTS 음성 처리에서 비동기 처리 필요, 현재는 서버가 단 하나여서 임시로 동기 처리.
-        """
-        tts_queue_model: TTSQueueModel = voice_model["tts_queue"].pop(0)
-        engine, model_name = self._get_user_engine(tts_queue_model["user_id"])
-
-        if engine == "ai":
-            if self.ai_engine and model_name:
-                try:
-                    source = await self.ai_engine.create_discord_source(
-                        text=tts_queue_model["text"],
-                        model_name=model_name,
+                vc = voice_model.get("vc")
+                if vc is None:
+                    logger.warning("TTS playback skipped: voice client missing", extra={"guild_id": guild_id})
+                    return
+                if not vc.is_connected():
+                    logger.warning(
+                        "TTS playback skipped: voice client disconnected",
+                        extra={"guild_id": guild_id},
                     )
-                except Exception as e:
-                    print(f"AI engine failed. Falling back to gTTS: {e}")
-                    engine = "gtts"
-            else:
-                print("AI engine unavailable or model missing. Falling back to gTTS.")
-                engine = "gtts"
-        if engine == "gtts":
-            tts_fp = await self.gtts_engine.synth(
-                text=tts_queue_model["text"],
-                user_id=tts_queue_model["user_id"],
-            )
-            source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
-        voice_model["vc"].play(
-            source,
-            after=lambda e: asyncio.run_coroutine_threadsafe(self.safe_play_tts(guild_id), self.bot.loop),
-        )
+                    return
+                if not voice_model["tts_queue"]:
+                    logger.debug("TTS playback skipped: queue empty", extra={"guild_id": guild_id})
+                    return
+                if vc.is_playing():
+                    logger.debug(
+                        "TTS playback skipped: already playing",
+                        extra={"guild_id": guild_id, "queue_size": len(voice_model["tts_queue"])},
+                    )
+                    return
+
+                queue_item = voice_model["tts_queue"][0]
+                try:
+                    source, used_engine = await self._create_tts_source(
+                        guild_id=guild_id,
+                        queue_item=queue_item,
+                    )
+                    if source is None:
+                        raise RuntimeError("TTS source is missing")
+                except Exception:
+                    logger.exception(
+                        "TTS source creation failed; skipping queue item",
+                        extra={
+                            "guild_id": guild_id,
+                            "user_id": queue_item["user_id"],
+                            "queue_size": len(voice_model["tts_queue"]),
+                        },
+                    )
+                    voice_model["tts_queue"].pop(0)
+                    continue
+
+                current_voice_model = self.queue.get(guild_id)
+                if (
+                    current_voice_model is not voice_model
+                    or current_voice_model.get("vc") is not vc
+                    or not vc.is_connected()
+                    or vc.is_playing()
+                ):
+                    try:
+                        source.cleanup()
+                    except Exception:
+                        logger.exception(
+                            "TTS source cleanup failed after voice state changed",
+                            extra={"guild_id": guild_id},
+                        )
+                    logger.warning(
+                        "TTS playback cancelled because voice state changed",
+                        extra={"guild_id": guild_id, "tts_engine": used_engine},
+                    )
+                    return
+
+                try:
+                    vc.play(source, after=self._make_after_callback(guild_id))
+                except Exception:
+                    try:
+                        source.cleanup()
+                    except Exception:
+                        logger.exception(
+                            "TTS source cleanup failed after playback start error",
+                            extra={"guild_id": guild_id},
+                        )
+                    voice_model["tts_queue"].pop(0)
+                    logger.exception(
+                        "TTS playback start failed; skipping queue item",
+                        extra={
+                            "guild_id": guild_id,
+                            "user_id": queue_item["user_id"],
+                            "tts_engine": used_engine,
+                            "queue_size": len(voice_model["tts_queue"]),
+                        },
+                    )
+                    continue
+
+                voice_model["tts_queue"].pop(0)
+                logger.info(
+                    "TTS playback started",
+                    extra={
+                        "guild_id": guild_id,
+                        "voice_channel_id": vc.channel.id if vc.channel else None,
+                        "user_id": queue_item["user_id"],
+                        "tts_engine": used_engine,
+                        "queue_size": len(voice_model["tts_queue"]),
+                    },
+                )
+                return
 
     async def safe_play_tts(self, guild_id: int):
         try:
             await self.play_tts(guild_id)
-        except Exception as e:
-            print(f"TTS 재생 중 오류 발생: {e}")
+        except Exception:
+            logger.exception("Unexpected TTS playback failure", extra={"guild_id": guild_id})
             
     def _has_image_attachment(self, message: discord.Message) -> bool:
         for attachment in message.attachments:
@@ -347,40 +783,69 @@ class TTS(commands.Cog):
 
         # if self.dmChannel.get(message.channel.id, None) is not None:
         if isinstance(message.channel, discord.channel.DMChannel):
-            print("dm message received")
+            logger.debug(
+                "DM TTS message received",
+                extra={"channel_id": message.channel.id, "user_id": message.author.id},
+            )
             guild_id = self.dmChannel.get(message.channel.id, None)
             if guild_id is None:
-                del self.dmChannel[message.channel.id]
+                self.dmChannel.pop(message.channel.id, None)
                 return
             guild = self.bot.get_guild(guild_id)
             if guild is None:
+                logger.warning(
+                    "DM TTS guild missing",
+                    extra={
+                        "guild_id": guild_id,
+                        "channel_id": message.channel.id,
+                        "user_id": message.author.id,
+                    },
+                )
                 return
 
             guild_queue = self._ensure_guild_state(guild)
             if guild_queue is None:
+                logger.warning(
+                    "DM TTS voice state unavailable",
+                    extra={
+                        "guild_id": guild_id,
+                        "channel_id": message.channel.id,
+                        "user_id": message.author.id,
+                    },
+                )
                 return
 
             member = guild.get_member(message.author.id)
             if not member:
-                member = await guild.fetch_member(message.author.id)
+                try:
+                    member = await guild.fetch_member(message.author.id)
+                except Exception:
+                    logger.exception(
+                        "DM TTS member lookup failed",
+                        extra={"guild_id": guild_id, "user_id": message.author.id},
+                    )
+                    return
 
             if member.voice is None:
-                del self.dmChannel[message.channel.id]
+                self.dmChannel.pop(message.channel.id, None)
                 return
 
             if member.voice.channel.id != guild_queue["voice_channel_id"]:
                 return
 
             tts_text = self._build_tts_text(message)
-            if not tts_text:
+            queued = await self._enqueue_tts(
+                guild_id=guild_id,
+                voice_model=guild_queue,
+                text=tts_text,
+                user_id=message.author.id,
+                channel_id=message.channel.id,
+            )
+            if not queued:
                 return
 
-            guild_queue["tts_queue"].append({
-                "text": tts_text,
-                "user_id": message.author.id,
-            })
             if not guild_queue["vc"].is_playing():
-                await self.play_tts(guild_id)
+                await self.safe_play_tts(guild_id)
             return
         
         if message.author.voice is None:
@@ -389,12 +854,42 @@ class TTS(commands.Cog):
         if self.queue.get(message.guild.id, None) is None:
             guild_queue = self._ensure_guild_state(message.guild)
             if guild_queue is None:
-                await self.clear_guild_queue(message.guild.id)
+                await self.clear_guild_queue(
+                    message.guild.id,
+                    reason="invalid_voice_state",
+                )
 
-                if not message.guild.voice_client:
-                    vc = await message.author.voice.channel.connect()
-                else:
-                    vc = message.guild.voice_client
+                try:
+                    if not message.guild.voice_client:
+                        vc = await message.author.voice.channel.connect()
+                        logger.info(
+                            "Voice channel connection succeeded",
+                            extra={
+                                "guild_id": message.guild.id,
+                                "voice_channel_id": message.author.voice.channel.id,
+                                "user_id": message.author.id,
+                            },
+                        )
+                    else:
+                        vc = message.guild.voice_client
+                        logger.info(
+                            "Reusing existing voice client",
+                            extra={
+                                "guild_id": message.guild.id,
+                                "voice_channel_id": vc.channel.id if vc.channel else None,
+                                "user_id": message.author.id,
+                            },
+                        )
+                except Exception:
+                    logger.exception(
+                        "Voice channel connection failed",
+                        extra={
+                            "guild_id": message.guild.id,
+                            "voice_channel_id": message.author.voice.channel.id,
+                            "user_id": message.author.id,
+                        },
+                    )
+                    return
 
                 self.queue[message.guild.id] = {
                     "guild_id": message.guild.id,
@@ -408,15 +903,18 @@ class TTS(commands.Cog):
             return
 
         tts_text = self._build_tts_text(message)
-        if not tts_text:
+        queued = await self._enqueue_tts(
+            guild_id=message.guild.id,
+            voice_model=guild_queue,
+            text=tts_text,
+            user_id=message.author.id,
+            channel_id=message.channel.id,
+        )
+        if not queued:
             return
 
-        guild_queue["tts_queue"].append({
-            "text": tts_text,
-            "user_id": message.author.id,
-        })
         if not guild_queue["vc"].is_playing():
-            await self.play_tts(message.guild.id)
+            await self.safe_play_tts(message.guild.id)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TTS(bot))

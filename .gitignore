@@ -5,3 +5,5 @@ db.sqlite
 .idea
 __pycache__
 .idea/*
+.venv/
+.pytest_cache/

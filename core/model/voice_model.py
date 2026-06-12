@@ -1,6 +1,6 @@
+from typing import List, TypedDict
+
 from discord import VoiceClient
-from typing_extensions import TypedDict
-from typing import List
 
 from .tts_queue_model import TTSQueueModel
 
