@@ -117,6 +117,8 @@ class AIStreamEngine:
                 raise
             except Exception as exc:
                 if not failed.done():
+                    # Store exceptions as values so an unconsumed timeout path
+                    # cannot emit "Future exception was never retrieved".
                     failed.set_result(exc)
                 logger.exception(
                     "AI TTS websocket feed failed",

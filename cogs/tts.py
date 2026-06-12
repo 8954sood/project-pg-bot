@@ -109,6 +109,27 @@ class TTS(commands.Cog):
                     extra={"guild_id": guild_id, "reason": reason},
                 )
 
+        self._discard_play_lock(guild_id)
+
+    def _discard_play_lock(self, guild_id: int) -> None:
+        lock = self.play_locks.get(guild_id)
+        if lock is None:
+            return
+        if not lock.locked():
+            self.play_locks.pop(guild_id, None)
+            return
+
+        async def discard_after_release(expected_lock: asyncio.Lock) -> None:
+            async with expected_lock:
+                pass
+            if (
+                self.play_locks.get(guild_id) is expected_lock
+                and guild_id not in self.queue
+            ):
+                self.play_locks.pop(guild_id, None)
+
+        asyncio.create_task(discard_after_release(lock))
+
     def _get_play_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self.play_locks.get(guild_id)
         if lock is None:
@@ -207,7 +228,11 @@ class TTS(commands.Cog):
 
         try:
             tts_fp = await asyncio.wait_for(
-                self.gtts_engine.synth(text=text, user_id=user_id),
+                self.gtts_engine.synth(
+                    text=text,
+                    user_id=user_id,
+                    timeout=self.gtts_timeout,
+                ),
                 timeout=self.gtts_timeout,
             )
             source = discord.FFmpegPCMAudio(tts_fp, pipe=True)
@@ -305,7 +330,10 @@ class TTS(commands.Cog):
                     "text_length": len(text),
                 },
             )
-            text = text[:self.max_text_length]
+            if self.max_text_length == 1:
+                text = "…"
+            else:
+                text = f"{text[:self.max_text_length - 1]}…"
 
         queue_size = len(voice_model["tts_queue"])
         if queue_size >= self.max_queue_size:
@@ -363,14 +391,28 @@ class TTS(commands.Cog):
             await ctx.response.send_message("채널에 입장 후 사용해주세요.")
             return
 
-        if ctx.guild.voice_client is None or ctx.guild.voice_client.channel.id != ctx.user.voice.channel.id:
+        previous_vc = ctx.guild.voice_client
+        previous_channel_id = (
+            previous_vc.channel.id
+            if previous_vc is not None and previous_vc.channel is not None
+            else None
+        )
+        if previous_channel_id != ctx.user.voice.channel.id:
             await self.clear_guild_queue(
                 guild_id,
                 reason="manual_join_other_channel",
             )
+            if previous_vc is not None:
+                await self._wait_for_voice_client_release(ctx.guild, previous_vc)
 
         try:
-            if not ctx.guild.voice_client:
+            current_vc = ctx.guild.voice_client
+            if (
+                current_vc is None
+                or not current_vc.is_connected()
+                or current_vc.channel is None
+                or current_vc.channel.id != ctx.user.voice.channel.id
+            ):
                 vc = await ctx.user.voice.channel.connect()
                 logger.info(
                     "Voice channel connection succeeded",
@@ -414,6 +456,31 @@ class TTS(commands.Cog):
             }
         self.messageChannel[guild_id] = ctx.channel.id
         await ctx.response.send_message("해당 채널에서도 TTS를 수신할게요!")
+
+    async def _wait_for_voice_client_release(
+        self,
+        guild: discord.Guild,
+        previous_vc: discord.VoiceClient,
+        *,
+        timeout: float = 2.0,
+    ) -> None:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while guild.voice_client is previous_vc:
+            if asyncio.get_running_loop().time() >= deadline:
+                logger.warning(
+                    "Timed out waiting for stale voice client release",
+                    extra={"guild_id": guild.id},
+                )
+                if not previous_vc.is_connected():
+                    try:
+                        previous_vc.cleanup()
+                    except Exception:
+                        logger.exception(
+                            "Stale voice client cleanup failed",
+                            extra={"guild_id": guild.id},
+                        )
+                return
+            await asyncio.sleep(0.05)
 
     @app_commands.command()
     @app_commands.choices(lang=[
@@ -528,7 +595,7 @@ class TTS(commands.Cog):
             if (
                 after.channel is not None and
                 member.id == self.bot.user.id and
-                sum(1 for member in after.channel.members if not member.bot) == 0
+                sum(1 for channel_member in after.channel.members if not channel_member.bot) == 0
             ):
                 logger.info(
                     "Empty voice channel detected after bot move",
@@ -555,7 +622,7 @@ class TTS(commands.Cog):
             join_member_list = before.channel.members
             if (
                 self.bot.user.id in list(map(lambda x: x.id, join_member_list)) and
-                sum(1 for member in join_member_list if not member.bot) == 0
+                sum(1 for channel_member in join_member_list if not channel_member.bot) == 0
             ):
                 logger.info(
                     "Empty voice channel detected",

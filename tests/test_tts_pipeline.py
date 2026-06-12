@@ -4,10 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+import websockets
 
 from cogs import tts as tts_module
 from cogs.tts import TTS
 from core.tts_engines.ai_stream_engine import AIStreamEngine
+from core.tts_engines.gtts_engine import GTTSEngine
 from core.tts_engines.stream_source import FFmpegStdoutAudioSource
 
 
@@ -27,6 +29,7 @@ class FakeVoiceClient:
         self.play_calls = []
         self.stop_calls = 0
         self.disconnect_calls = 0
+        self.cleanup_calls = 0
 
     def is_connected(self):
         return self.connected
@@ -45,6 +48,9 @@ class FakeVoiceClient:
     async def disconnect(self):
         self.disconnect_calls += 1
         self.connected = False
+
+    def cleanup(self):
+        self.cleanup_calls += 1
 
 
 def make_cog(loop, *, voice_client=None):
@@ -118,7 +124,11 @@ async def test_ai_failure_falls_back_to_gtts(monkeypatch):
 
     assert source is fake_source
     assert engine == "gtts"
-    cog.gtts_engine.synth.assert_awaited_once()
+    cog.gtts_engine.synth.assert_awaited_once_with(
+        text="hello",
+        user_id=10,
+        timeout=cog.gtts_timeout,
+    )
 
 
 @pytest.mark.asyncio
@@ -241,6 +251,46 @@ async def test_clear_queue_removes_all_dm_routes_without_mutation_error():
 
 
 @pytest.mark.asyncio
+async def test_clear_queue_discards_unused_play_lock():
+    loop = asyncio.get_running_loop()
+    cog = make_cog(loop)
+    cog._get_play_lock(1)
+
+    await cog.clear_guild_queue(1, reason="test_lock_cleanup")
+
+    assert 1 not in cog.play_locks
+
+
+@pytest.mark.asyncio
+async def test_clear_queue_discards_locked_play_lock_after_release():
+    loop = asyncio.get_running_loop()
+    cog = make_cog(loop)
+    lock = cog._get_play_lock(1)
+
+    await lock.acquire()
+    await cog.clear_guild_queue(1, reason="test_locked_lock_cleanup")
+    assert cog.play_locks[1] is lock
+
+    lock.release()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert 1 not in cog.play_locks
+
+
+@pytest.mark.asyncio
+async def test_stale_voice_client_is_cleaned_up_after_release_timeout():
+    loop = asyncio.get_running_loop()
+    cog = make_cog(loop)
+    vc = FakeVoiceClient(connected=False)
+    guild = SimpleNamespace(id=1, voice_client=vc)
+
+    await cog._wait_for_voice_client_release(guild, vc, timeout=0)
+
+    assert vc.cleanup_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_full_queue_drops_new_message_without_disconnect():
     loop = asyncio.get_running_loop()
     vc = FakeVoiceClient()
@@ -278,7 +328,7 @@ async def test_enqueue_truncates_text_to_configured_limit():
     )
 
     assert queued is True
-    assert cog.queue[1]["tts_queue"][0]["text"] == "12345"
+    assert cog.queue[1]["tts_queue"][0]["text"] == "1234…"
 
 
 @pytest.mark.asyncio
@@ -325,12 +375,33 @@ def test_ffmpeg_source_cleanup_is_idempotent():
     proc.stdout.close.assert_called_once()
 
 
+def test_gtts_engine_passes_network_timeout(monkeypatch):
+    created = {}
+    fake_tts = SimpleNamespace(write_to_fp=lambda fp: fp.write(b"mp3"))
+
+    def create_gtts(**kwargs):
+        created.update(kwargs)
+        return fake_tts
+
+    monkeypatch.setattr("core.tts_engines.gtts_engine.gTTS", create_gtts)
+    engine = GTTSEngine(lambda user_id: "ko")
+
+    result = engine._synth_sync("hello", 10, 3.5)
+
+    assert result.read() == b"mp3"
+    assert created["timeout"] == 3.5
+
+
 class FakePipe:
     def __init__(self):
         self.closed = False
+        self.writes = []
 
     def close(self):
         self.closed = True
+
+    def write(self, data):
+        self.writes.append(data)
 
 
 class FakeProcess:
@@ -421,3 +492,35 @@ async def test_ai_end_before_first_chunk_cleans_up_ffmpeg(monkeypatch):
     assert proc.stdin.closed
     assert proc.stdout.closed
     assert proc.terminated
+
+
+@pytest.mark.asyncio
+async def test_websockets_15_connects_to_local_server(monkeypatch):
+    received_requests = []
+
+    async def handler(websocket, *args):
+        received_requests.append(await websocket.recv())
+        await websocket.send(b"audio")
+        await websocket.send('{"type": "end"}')
+
+    proc = FakeProcess()
+    monkeypatch.setattr(
+        "core.tts_engines.ai_stream_engine.subprocess.Popen",
+        lambda *args, **kwargs: proc,
+    )
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        engine = AIStreamEngine(
+            ai_ws_url=f"ws://127.0.0.1:{port}",
+            first_chunk_timeout=1,
+        )
+        source = await engine.create_discord_source(
+            text="hello",
+            model_name="model-a",
+        )
+        await asyncio.sleep(0)
+        source.cleanup()
+
+    assert received_requests
+    assert proc.stdin.writes == [b"audio"]
