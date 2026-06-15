@@ -2,6 +2,7 @@ from core.local.tts import TTSDataSource
 from core.local.user import UserDataSource
 from core.local.voiceoption import VoiceOptionDataSource
 from core.local.ttsengine import TTSEngineOptionDataSource, TTSEngineAllowDataSource
+from core.local.sleep_timer import SleepTimerDataSource
 
 
 class LocalCore:
@@ -11,6 +12,7 @@ class LocalCore:
     voiceOptionDataSource: VoiceOptionDataSource = VoiceOptionDataSource
     ttsEngineOptionDataSource: TTSEngineOptionDataSource = TTSEngineOptionDataSource
     ttsEngineAllowDataSource: TTSEngineAllowDataSource = TTSEngineAllowDataSource
+    sleepTimerDataSource: SleepTimerDataSource = SleepTimerDataSource
 
 
     @staticmethod
@@ -20,3 +22,4 @@ class LocalCore:
         await LocalCore.voiceOptionDataSource.init_table()
         await LocalCore.ttsEngineOptionDataSource.init_table()
         await LocalCore.ttsEngineAllowDataSource.init_table()
+        await LocalCore.sleepTimerDataSource.init_table()

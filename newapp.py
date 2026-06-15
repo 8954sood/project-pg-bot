@@ -6,6 +6,7 @@ import logging
 import os
 
 from core.local import LocalCore
+from core.utile import KoreanTranslator
 import platform
 
 
@@ -65,6 +66,8 @@ bot = commands.Bot(command_prefix='-', description=description, intents=intents)
 @bot.event
 async def on_ready():
     await LocalCore.init_tables()
+    if bot.tree.translator is None:
+        await bot.tree.set_translator(KoreanTranslator())
 
     for cog in os.listdir("./cogs"):
         if cog.endswith(".py"):
