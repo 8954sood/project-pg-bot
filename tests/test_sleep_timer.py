@@ -13,6 +13,7 @@ from cogs.sleep_timer import (
     SleepTimerModal,
     WarningCancelView,
     format_target,
+    format_remaining,
     parse_next_kst_time,
 )
 from core.local import LocalCore
@@ -302,6 +303,33 @@ async def test_warning_dm_failure_does_not_delete_reservation(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_warning_dm_shows_actual_target_and_remaining_time(monkeypatch):
+    now = datetime(2026, 6, 15, 9, 32, 10, tzinfo=timezone.utc)
+    execute_at = datetime(2026, 6, 15, 9, 33, tzinfo=timezone.utc)
+    sent_views = []
+
+    async def send(*, view):
+        sent_views.append(view)
+        return SimpleNamespace(id=123)
+
+    user = SimpleNamespace(send=AsyncMock(side_effect=send))
+    cog = make_cog(now=now, user=user)
+    item = reservation(execute_at=int(execute_at.timestamp()))
+    data_source = SimpleNamespace(
+        get=AsyncMock(return_value=item),
+        set_warning_message=AsyncMock(),
+    )
+    monkeypatch.setattr(LocalCore, "sleepTimerDataSource", data_source)
+
+    await cog._send_warning(item)
+
+    text = "\n".join(text_displays(sent_views[0]))
+    assert "2026년 06월 15일 18:33 KST" in text
+    assert "약 1분 이내" in text
+    assert "약 5분 뒤" not in text
+
+
+@pytest.mark.asyncio
 async def test_restore_expires_overdue_and_restores_persistent_warning(monkeypatch):
     now = datetime.fromtimestamp(2_000_000_000, timezone.utc)
     expired = reservation(reservation_id="expired", execute_at=1_999_999_999)
@@ -360,3 +388,16 @@ def test_format_target_accepts_utc_and_renders_kst():
 
     assert "2026년 06월 15일 13:00 KST" in text
     assert "1시간 후" in text
+
+
+def test_format_remaining_rounds_up_without_claiming_five_minutes():
+    now = datetime(2026, 6, 15, 9, 32, tzinfo=timezone.utc)
+
+    assert format_remaining(
+        datetime(2026, 6, 15, 9, 32, 59, tzinfo=timezone.utc),
+        now,
+    ) == "1분 이내"
+    assert format_remaining(
+        datetime(2026, 6, 15, 9, 33, 1, tzinfo=timezone.utc),
+        now,
+    ) == "2분 후"

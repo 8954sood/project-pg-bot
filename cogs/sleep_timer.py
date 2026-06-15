@@ -48,9 +48,11 @@ def parse_next_kst_time(value: str, now: datetime) -> datetime:
     return target
 
 
-def format_target(execute_at: datetime, now: datetime) -> str:
-    execute_kst = execute_at.astimezone(KST)
+def format_remaining(execute_at: datetime, now: datetime) -> str:
     seconds = max(0, math.ceil((execute_at - now).total_seconds()))
+    if seconds < 60:
+        return "1분 이내"
+
     hours, remainder = divmod(seconds, 3600)
     minutes = math.ceil(remainder / 60) if remainder else 0
     if minutes == 60:
@@ -58,9 +60,13 @@ def format_target(execute_at: datetime, now: datetime) -> str:
         minutes = 0
 
     if hours:
-        remaining = f"{hours}시간 {minutes}분 후" if minutes else f"{hours}시간 후"
-    else:
-        remaining = f"{minutes}분 후"
+        return f"{hours}시간 {minutes}분 후" if minutes else f"{hours}시간 후"
+    return f"{minutes}분 후"
+
+
+def format_target(execute_at: datetime, now: datetime) -> str:
+    execute_kst = execute_at.astimezone(KST)
+    remaining = format_remaining(execute_at, now)
 
     return (
         f"## 입력한 시간을 확인해 주세요\n"
@@ -359,12 +365,15 @@ class WarningCancelView(discord.ui.LayoutView):
         guild_id: int,
         user_id: int,
         reservation_id: str,
+        execute_at: datetime,
     ):
         super().__init__(timeout=None)
         self.cog = cog
         self.guild_id = guild_id
         self.user_id = user_id
         self.reservation_id = reservation_id
+        execute_kst = execute_at.astimezone(KST)
+        remaining = format_remaining(execute_at, cog.now())
 
         cancel = discord.ui.Button(
             label="퇴출 취소",
@@ -378,7 +387,8 @@ class WarningCancelView(discord.ui.LayoutView):
             discord.ui.Container(
                 discord.ui.TextDisplay(
                     "## 수면 타이머 알림\n"
-                    "약 5분 뒤 음성 채널에서 나갑니다.\n"
+                    f"**실행 시각:** {execute_kst:%Y년 %m월 %d일 %H:%M} KST\n"
+                    f"**남은 시간:** 약 {remaining}\n"
                     "계속 머무르려면 아래 버튼으로 예약을 취소하세요."
                 ),
                 discord.ui.ActionRow(cancel),
@@ -545,6 +555,10 @@ class SleepTimer(commands.Cog):
                         reservation.guild_id,
                         reservation.user_id,
                         reservation.reservation_id,
+                        datetime.fromtimestamp(
+                            reservation.execute_at,
+                            timezone.utc,
+                        ),
                     ),
                     message_id=reservation.warning_message_id,
                 )
@@ -604,6 +618,7 @@ class SleepTimer(commands.Cog):
             reservation.guild_id,
             reservation.user_id,
             reservation.reservation_id,
+            datetime.fromtimestamp(reservation.execute_at, timezone.utc),
         )
         try:
             message = await user.send(view=view)
