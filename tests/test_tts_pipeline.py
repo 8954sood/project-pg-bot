@@ -6,11 +6,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import websockets
 
-from ui.tts import cog as tts_module
 from ui.tts.cog import TTS
-from core.tts_engines.ai_stream_engine import AIStreamEngine
-from core.tts_engines.gtts_engine import GTTSEngine
-from core.tts_engines.stream_source import FFmpegStdoutAudioSource
+from core.tts.engines.ai_stream_engine import AIStreamEngine
+from core.tts.engines.gtts_engine import GTTSEngine
+from core.tts.engines.stream_source import FFmpegStdoutAudioSource
 
 
 class FakeSource:
@@ -115,7 +114,7 @@ async def test_ai_failure_falls_back_to_gtts(monkeypatch):
         create_discord_source=AsyncMock(side_effect=RuntimeError("AI down"))
     )
     fake_source = FakeSource()
-    monkeypatch.setattr(tts_module.discord, "FFmpegPCMAudio", lambda *args, **kwargs: fake_source)
+    monkeypatch.setattr("core.tts.service.discord.FFmpegPCMAudio", lambda *args, **kwargs: fake_source)
 
     source, engine = await cog._create_tts_source(
         guild_id=1,
@@ -383,7 +382,7 @@ def test_gtts_engine_passes_network_timeout(monkeypatch):
         created.update(kwargs)
         return fake_tts
 
-    monkeypatch.setattr("core.tts_engines.gtts_engine.gTTS", create_gtts)
+    monkeypatch.setattr("core.tts.engines.gtts_engine.gTTS", create_gtts)
     engine = GTTSEngine(lambda user_id: "ko")
 
     result = engine._synth_sync("hello", 10, 3.5)
@@ -456,11 +455,11 @@ class EndingWebsocketContext(WebsocketContext):
 async def test_ai_first_chunk_timeout_cleans_up_ffmpeg(monkeypatch):
     proc = FakeProcess()
     monkeypatch.setattr(
-        "core.tts_engines.ai_stream_engine.subprocess.Popen",
+        "core.tts.engines.ai_stream_engine.subprocess.Popen",
         lambda *args, **kwargs: proc,
     )
     monkeypatch.setattr(
-        "core.tts_engines.ai_stream_engine.websockets.connect",
+        "core.tts.engines.ai_stream_engine.websockets.connect",
         lambda *args, **kwargs: WebsocketContext(),
     )
     engine = AIStreamEngine(ai_ws_url="ws://example.invalid", first_chunk_timeout=0.01)
@@ -477,11 +476,11 @@ async def test_ai_first_chunk_timeout_cleans_up_ffmpeg(monkeypatch):
 async def test_ai_end_before_first_chunk_cleans_up_ffmpeg(monkeypatch):
     proc = FakeProcess()
     monkeypatch.setattr(
-        "core.tts_engines.ai_stream_engine.subprocess.Popen",
+        "core.tts.engines.ai_stream_engine.subprocess.Popen",
         lambda *args, **kwargs: proc,
     )
     monkeypatch.setattr(
-        "core.tts_engines.ai_stream_engine.websockets.connect",
+        "core.tts.engines.ai_stream_engine.websockets.connect",
         lambda *args, **kwargs: EndingWebsocketContext(),
     )
     engine = AIStreamEngine(ai_ws_url="ws://example.invalid", first_chunk_timeout=1)
@@ -505,7 +504,7 @@ async def test_websockets_15_connects_to_local_server(monkeypatch):
 
     proc = FakeProcess()
     monkeypatch.setattr(
-        "core.tts_engines.ai_stream_engine.subprocess.Popen",
+        "core.tts.engines.ai_stream_engine.subprocess.Popen",
         lambda *args, **kwargs: proc,
     )
 
