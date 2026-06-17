@@ -8,7 +8,7 @@ from discord import app_commands, Interaction, VoiceState, TextChannel, Member
 from discord.ext import commands
 
 from core.local import LocalCore
-from core.model import VoiceModel, TTSQueueModel
+from core.tts.models import VoiceModel, TTSQueueModel
 from core.tts_engines.ai_stream_engine import AIStreamEngine
 from core.tts_engines.gtts_engine import GTTSEngine
 from core.local.ttsengine.dto import TTSEngineOption
