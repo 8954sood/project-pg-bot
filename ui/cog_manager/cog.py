@@ -1,4 +1,4 @@
-﻿from discord.ext import commands
+from discord.ext import commands
 
 
 class CogManager(commands.Cog):
@@ -7,11 +7,19 @@ class CogManager(commands.Cog):
 
     def _normalize_ext(self, name: str) -> str:
         name = name.strip()
-        if name.startswith("cogs."):
+        if name.startswith("ui."):
             return name
         if name.endswith(".py"):
             name = name[:-3]
-        return f"cogs.{name}"
+        simple_map = {
+            "tts": "ui.tts.cog",
+            "sleep_timer": "ui.sleep_timer.cog",
+            "role": "ui.role.cog",
+            "emoji": "ui.emoji.cog",
+            "emoji_register": "ui.emoji.cog",
+            "cog_manager": "ui.cog_manager.cog",
+        }
+        return simple_map.get(name, f"ui.{name}.cog")
 
     @commands.command()
     @commands.is_owner()
@@ -49,3 +57,4 @@ class CogManager(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(CogManager(bot))
+

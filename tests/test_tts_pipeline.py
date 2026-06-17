@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import websockets
 
-from cogs import tts as tts_module
-from cogs.tts import TTS
+from ui.tts import cog as tts_module
+from ui.tts.cog import TTS
 from core.tts_engines.ai_stream_engine import AIStreamEngine
 from core.tts_engines.gtts_engine import GTTSEngine
 from core.tts_engines.stream_source import FFmpegStdoutAudioSource
