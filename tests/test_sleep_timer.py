@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import discord
 import pytest
 
-from cogs.sleep_timer import (
+from ui.sleep_timer.cog import (
     ConfirmationView,
     KST,
     SleepTimer,
