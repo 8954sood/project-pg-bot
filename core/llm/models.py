@@ -60,14 +60,6 @@ class ServerStyleProfile:
 
 
 @dataclass(slots=True)
-class UserStyleProfile:
-    user_id: str
-    user_name: str
-    notes: list[str] = field(default_factory=list)
-    phrases: list[str] = field(default_factory=list)
-
-
-@dataclass(slots=True)
 class UserMemory:
     user_id: str
     user_name: str
@@ -122,16 +114,9 @@ class MemoryState:
     server_style: ServerStyleProfile = field(default_factory=ServerStyleProfile)
     active_style_directive: str = ""
     user_memories: dict[str, UserMemory] = field(default_factory=dict)
-    user_styles: dict[str, UserStyleProfile] = field(default_factory=dict)
     relationship_notes: list[str] = field(default_factory=list)
     recent_logs: list[RecentLogEntry] = field(default_factory=list)
     recent_summary: str = ""
-    memory_job_running: bool = False
-    memory_job_started_at: datetime | None = None
-    pending_memory_job_id: str | None = None
-    turns_since_last_memory_extraction: int = 0
-    memory_extraction_cooldown_turns: int = 0
-    last_memory_extraction_had_changes: bool = False
 
 
 @dataclass(slots=True)
@@ -180,14 +165,3 @@ class LLMResponseResult:
     message: str
     response_text: str = ""
 
-
-@dataclass(slots=True)
-class MemoryExtractionResult:
-    active_style_directive: str
-    server_style_summary: str
-    server_memory_add: list[str]
-    relationship_notes_add: list[str]
-    user_memory_add: list[tuple[str, str, str]]
-    user_style_add: list[tuple[str, str, str]]
-    user_style_phrases_add: list[tuple[str, str, list[str]]]
-    had_changes: bool

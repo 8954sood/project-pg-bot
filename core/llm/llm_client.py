@@ -5,12 +5,15 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from core.llm.config import LLMProviderConfig, LLMPayloadLoggingConfig
 from core.llm.models import ToolCall
 
 logger = logging.getLogger(__name__)
+REQUEST_JSONL_PATH = Path("logs/llm_requests.jsonl")
 
 
 @dataclass(slots=True)
@@ -99,6 +102,7 @@ class OpenAICompatibleClient:
             headers["Authorization"] = f"Bearer {config.api_key}"
         start = time.perf_counter()
         request = urllib.request.Request(url, data=encoded, headers=headers, method="POST")
+        self._write_jsonl_request(url, payload, tool_choice)
         self._log_request(config, messages)
         try:
             with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
@@ -172,3 +176,21 @@ class OpenAICompatibleClient:
             payload = json.dumps(messages, ensure_ascii=False)
             extra["payload"] = payload[: self.payload_logging.max_chars]
         logger.info("LLM request prepared", extra=extra)
+
+    def _write_jsonl_request(self, url: str, payload: dict[str, Any], tool_choice: str) -> None:
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "purpose": self.purpose,
+            "url": url,
+            "model": payload.get("model"),
+            "message_count": len(payload.get("messages", [])),
+            "tool_choice": tool_choice if payload.get("tools") else None,
+            "tools": payload.get("tools", []),
+            "payload": payload,
+        }
+        try:
+            REQUEST_JSONL_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with REQUEST_JSONL_PATH.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.exception("Failed to write LLM request JSONL", extra={"purpose": self.purpose})

@@ -6,8 +6,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.llm.config import LLMSettings, load_llm_settings
-from core.llm.llm_client import OpenAICompatibleClient
-from core.llm.memory_extractor import LLMMemoryExtractor
 from core.llm.models import LLMInputMessage
 from core.llm.service import LLMService
 from core.local import LocalCore
@@ -24,9 +22,7 @@ class LLMCog(commands.Cog):
     def __init__(self, bot: commands.Bot, settings: Optional[LLMSettings] = None):
         self.bot = bot
         self.settings = settings or load_llm_settings()
-        client = OpenAICompatibleClient(self.settings.payload_logging, purpose="memory_extraction")
-        extractor = LLMMemoryExtractor(client, self.settings.aux) if self.settings.memory.enabled else None
-        self.service = LLMService(self.settings, extractor=extractor)
+        self.service = LLMService(self.settings)
         self.typing = LLMTypingManager(self.settings.typing_refresh_seconds)
 
     def _is_ignored_message(self, message: discord.Message) -> bool:
@@ -194,6 +190,69 @@ class LLMCog(commands.Cog):
             return
         updated = await LocalCore.llmGlobalMemoryDataSource.set_enabled(memory_id, str(interaction.guild.id), False)
         await interaction.response.send_message("비활성화했습니다." if updated else "대상 전역 메모리를 찾지 못했습니다.", ephemeral=True)
+
+    @llm_memory.command(name="my-list", description="내 개인 메모리 목록을 확인합니다.")
+    @app_commands.guild_only()
+    async def list_my_memory(self, interaction: discord.Interaction) -> None:
+        if await self._reject_if_unavailable(interaction):
+            return
+        rows = await LocalCore.llmUserMemoryDataSource.list_user(
+            str(interaction.guild.id),
+            str(interaction.channel.id),
+            str(interaction.user.id),
+            include_disabled=True,
+        )
+        if not rows:
+            await interaction.response.send_message("등록된 개인 메모리가 없습니다.", ephemeral=True)
+            return
+        lines = [
+            f"`{row.id}` [{'on' if row.enabled else 'off'}] {row.key or '-'}: {row.content[:160]}"
+            for row in rows[:20]
+        ]
+        await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
+
+    @llm_memory.command(name="my-add", description="내 개인 메모리를 추가합니다.")
+    @app_commands.guild_only()
+    async def add_my_memory(self, interaction: discord.Interaction, content: str, key: Optional[str] = None) -> None:
+        if await self._reject_if_unavailable(interaction):
+            return
+        memory_id = await LocalCore.llmUserMemoryDataSource.add(
+            str(interaction.guild.id),
+            str(interaction.channel.id),
+            str(interaction.user.id),
+            content,
+            key=key,
+            user_name=getattr(interaction.user, "display_name", str(interaction.user.id)),
+        )
+        await interaction.response.send_message(f"개인 메모리를 추가했습니다. id=`{memory_id}`", ephemeral=True)
+
+    @llm_memory.command(name="my-edit", description="내 개인 메모리를 수정합니다.")
+    @app_commands.guild_only()
+    async def edit_my_memory(self, interaction: discord.Interaction, memory_id: int, content: str, key: Optional[str] = None) -> None:
+        if await self._reject_if_unavailable(interaction):
+            return
+        updated = await LocalCore.llmUserMemoryDataSource.update_user_memory(
+            memory_id,
+            str(interaction.guild.id),
+            str(interaction.channel.id),
+            str(interaction.user.id),
+            content=content,
+            key=key,
+        )
+        await interaction.response.send_message("수정했습니다." if updated else "대상 개인 메모리를 찾지 못했습니다.", ephemeral=True)
+
+    @llm_memory.command(name="my-delete", description="내 개인 메모리를 삭제합니다.")
+    @app_commands.guild_only()
+    async def delete_my_memory(self, interaction: discord.Interaction, memory_id: int) -> None:
+        if await self._reject_if_unavailable(interaction):
+            return
+        deleted = await LocalCore.llmUserMemoryDataSource.delete_user_memory(
+            memory_id,
+            str(interaction.guild.id),
+            str(interaction.channel.id),
+            str(interaction.user.id),
+        )
+        await interaction.response.send_message("삭제했습니다." if deleted else "대상 개인 메모리를 찾지 못했습니다.", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

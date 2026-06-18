@@ -4,7 +4,7 @@ from typing import Any, ClassVar
 from core.llm.models import LLMBufferedMessage
 
 SAVE_SCOPE_DESCRIPTION = (
-    "user=해당 발화자 개인 저장, server=서버/채널 전역 저장(관리자만). 명시가 없으면 user."
+    "항상 해당 발화자 본인의 개인 메모리에만 적용한다. server가 전달되어도 서버 메모리는 수정하지 않는다."
 )
 
 
@@ -60,6 +60,17 @@ class LLMTool:
     @staticmethod
     def parse_note(arguments: dict[str, Any]) -> str:
         return str(arguments.get("note", "") or "").strip()
+
+    @staticmethod
+    def parse_memory_id(arguments: dict[str, Any]) -> int | None:
+        raw = arguments.get("memory_id")
+        if raw is None or raw == "":
+            return None
+        try:
+            memory_id = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return memory_id if memory_id > 0 else None
 
 
 class LLMToolRegistry:

@@ -8,7 +8,7 @@ def test_parse_guild_channel_map_uses_guild_and_channel_pairs(caplog):
     assert "Invalid LLM_GUILD_CHANNEL_MAP entry ignored" in caplog.text
 
 
-def test_llm_test_compatible_env_names_and_aux_fallback():
+def test_llm_test_compatible_env_names():
     settings = load_llm_settings(
         {
             "OPENAI_API_KEY": "openai-key",
@@ -17,7 +17,6 @@ def test_llm_test_compatible_env_names_and_aux_fallback():
             "OPENAI_TIMEOUT_SECONDS": "11",
             "OPENAI_TEMPERATURE": "0.2",
             "OPENAI_MAX_TOKENS": "77",
-            "LLM_AUX_MODEL": "aux-model",
             "LLM_GUILD_CHANNEL_MAP": "1:2",
             "LLM_MAX_RECENT_CONVERSATION_LINES": "5",
         }
@@ -29,8 +28,5 @@ def test_llm_test_compatible_env_names_and_aux_fallback():
     assert settings.main.timeout_seconds == 11
     assert settings.main.temperature == 0.2
     assert settings.main.max_tokens == 77
-    assert settings.aux.api_key == "openai-key"
-    assert settings.aux.base_url == "https://example.test"
-    assert settings.aux.model == "aux-model"
     assert settings.max_recent_conversation_lines == 5
     assert settings.is_allowed("1", "2")

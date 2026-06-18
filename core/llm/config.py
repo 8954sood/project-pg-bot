@@ -74,30 +74,6 @@ class LLMProviderConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class LLMMemoryConfig:
-    enabled: bool = True
-    min_user_chars: int = 20
-    min_total_chars: int = 80
-    every_n_turns: int = 3
-    cooldown_turns_after_empty: int = 3
-    trigger_keywords_enabled: bool = True
-    trigger_keywords: tuple[str, ...] = (
-        "기억해",
-        "기억",
-        "앞으로",
-        "나는",
-        "내가",
-        "우리",
-        "설정",
-        "말투",
-        "호칭",
-    )
-    async_enabled: bool = True
-    blocks_next_response: bool = True
-    job_timeout_seconds: float = 30.0
-
-
-@dataclass(frozen=True, slots=True)
 class LLMPayloadLoggingConfig:
     log_payloads: bool = False
     max_chars: int = 2000
@@ -108,9 +84,7 @@ class LLMSettings:
     guild_channel_map: dict[str, set[str]] = field(default_factory=dict)
     consent_version: str = "2026-06-llm-memory-v1"
     main: LLMProviderConfig = field(default_factory=LLMProviderConfig)
-    aux: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     payload_logging: LLMPayloadLoggingConfig = field(default_factory=LLMPayloadLoggingConfig)
-    memory: LLMMemoryConfig = field(default_factory=LLMMemoryConfig)
     debounce_seconds: float = 2.0
     response_cooldown_seconds: float = 3.0
     max_recent_logs: int = 80
@@ -137,41 +111,13 @@ def load_llm_settings(environ: Mapping[str, str] | None = None) -> LLMSettings:
         temperature=_float(_first_env(env, "LLM_TEMPERATURE", "OPENAI_TEMPERATURE", default="0.7"), 0.7),
         max_tokens=_int(_first_env(env, "LLM_MAX_TOKENS", "OPENAI_MAX_TOKENS", default="1024"), 1024),
     )
-    aux = LLMProviderConfig(
-        api_key=_first_env(env, "LLM_AUX_API_KEY", "OPENAI_AUX_API_KEY", default=main.api_key),
-        base_url=_first_env(env, "LLM_AUX_BASE_URL", "OPENAI_AUX_BASE_URL", default=main.base_url),
-        model=_first_env(env, "LLM_AUX_MODEL", "OPENAI_AUX_MODEL", default=main.model),
-        timeout_seconds=_float(
-            _first_env(env, "LLM_AUX_TIMEOUT_SECONDS", "OPENAI_AUX_TIMEOUT_SECONDS", default=str(main.timeout_seconds)),
-            main.timeout_seconds,
-        ),
-        temperature=main.temperature,
-        max_tokens=main.max_tokens,
-    )
     return LLMSettings(
         guild_channel_map=parse_guild_channel_map(env.get("LLM_GUILD_CHANNEL_MAP", "")),
         consent_version=env.get("LLM_CONSENT_VERSION", "2026-06-llm-memory-v1"),
         main=main,
-        aux=aux,
         payload_logging=LLMPayloadLoggingConfig(
             log_payloads=_bool(_first_env(env, "LLM_LOG_PAYLOADS", "OPENAI_LOG_PAYLOADS", default="false")),
             max_chars=_int(_first_env(env, "LLM_LOG_PAYLOAD_MAX_CHARS", "OPENAI_LOG_PAYLOAD_MAX_CHARS", default="2000"), 2000),
-        ),
-        memory=LLMMemoryConfig(
-            enabled=_bool(env.get("MEMORY_EXTRACTION_ENABLED", "true"), True),
-            min_user_chars=_int(env.get("MEMORY_EXTRACTION_MIN_USER_CHARS", "20"), 20),
-            min_total_chars=_int(env.get("MEMORY_EXTRACTION_MIN_TOTAL_CHARS", "80"), 80),
-            every_n_turns=_int(env.get("MEMORY_EXTRACTION_EVERY_N_TURNS", "3"), 3),
-            cooldown_turns_after_empty=_int(env.get("MEMORY_EXTRACTION_COOLDOWN_TURNS_AFTER_EMPTY", "3"), 3),
-            trigger_keywords_enabled=_bool(env.get("MEMORY_EXTRACTION_TRIGGER_KEYWORDS_ENABLED", "true"), True),
-            trigger_keywords=tuple(
-                keyword.strip()
-                for keyword in env.get("MEMORY_EXTRACTION_TRIGGER_KEYWORDS", "기억해,기억,앞으로,나는,내가,우리,설정,말투,호칭").split(",")
-                if keyword.strip()
-            ),
-            async_enabled=_bool(env.get("MEMORY_EXTRACTION_ASYNC_ENABLED", "true"), True),
-            blocks_next_response=_bool(env.get("MEMORY_JOB_BLOCKS_NEXT_RESPONSE", "true"), True),
-            job_timeout_seconds=_float(env.get("MEMORY_JOB_TIMEOUT_SECONDS", "30"), 30.0),
         ),
         debounce_seconds=_float(env.get("LLM_DEBOUNCE_SECONDS", "2"), 2.0),
         response_cooldown_seconds=_float(env.get("LLM_RESPONSE_COOLDOWN_SECONDS", "3"), 3.0),

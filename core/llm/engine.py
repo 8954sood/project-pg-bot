@@ -18,8 +18,8 @@ class LLMEngine:
     """MAIN LLM orchestrator. Calls the LLM with tool definitions and loops until a final answer.
 
     Flow: MAIN LLM sees the user message + memory context + available tools, then either
-    answers directly or emits tool calls (save_memory / save_style / clear_memory). Tool
-    results are fed back to MAIN, which produces the final answer.
+    answers directly or emits tool calls (save_memory / clear_memory). Tool results are
+    fed back to MAIN, which produces the final answer.
     """
 
     def __init__(

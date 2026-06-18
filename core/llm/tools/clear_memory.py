@@ -1,45 +1,36 @@
 from core.llm.tools.base import SAVE_SCOPE_DESCRIPTION, LLMTool, ToolContext, register_tool
-from core.local.llm import (
-    LLMGlobalMemoryDataSource,
-    LLMServerStateDataSource,
-    LLMSpeechStyleDataSource,
-    LLMUserMemoryDataSource,
-)
+from core.local.llm import LLMUserMemoryDataSource
 
 
 @register_tool
 class ClearMemoryTool(LLMTool):
     name = "clear_memory"
     description = (
-        "사용자가 기억/말투를 삭제/초기화/비우/리셋하라고 명시했을 때 호출한다. "
-        "저장된 기억과 말투 설정을 함께 지운다."
+        "사용자가 본인 개인 메모리/말투/호칭/응답 포맷을 삭제/초기화/비우/리셋하라고 명시했을 때 호출한다. "
+        "memory_id가 있으면 해당 id의 본인 개인 메모리만 삭제하고, 없으면 본인 개인 메모리를 모두 삭제한다. "
+        "서버 메모리와 타인의 메모리는 절대 삭제하지 않는다."
     )
     parameters = {
         "type": "object",
         "properties": {
             "scope": {"type": "string", "enum": ["user", "server"], "description": SAVE_SCOPE_DESCRIPTION},
+            "memory_id": {"type": "integer", "description": "삭제할 본인 개인 메모리 id. 생략하면 본인 개인 메모리 전체 삭제."},
         },
-        "required": ["scope"],
+        "required": [],
     }
 
     async def run(self, arguments: dict, ctx: ToolContext) -> str:
-        scope = self.parse_scope(arguments)
         actor = ctx.actor
+        memory_id = self.parse_memory_id(arguments)
 
-        if scope == "server" and actor.is_admin:
-            deleted_memories = await LLMGlobalMemoryDataSource.delete_scope(ctx.guild_id, ctx.channel_id)
-            await LLMServerStateDataSource.reset_style_and_notes(ctx.guild_id, ctx.channel_id)
-            return f"서버/채널 전역 기억 {deleted_memories}개와 서버 말투 설정을 삭제했습니다."
-
-        deleted_user_memories = await LLMUserMemoryDataSource.delete_user(
-            ctx.guild_id, ctx.channel_id, actor.user_id
-        )
-        deleted_user_styles = await LLMSpeechStyleDataSource.delete_user(
-            ctx.guild_id, ctx.channel_id, actor.user_id
-        )
-        if scope == "server":
-            return (
-                "서버 전역 기억/말투를 삭제하려면 Discord 관리자 권한이 필요합니다. "
-                f"대신 본인 개인 기억 {deleted_user_memories}개와 개인 말투 설정 {deleted_user_styles}개를 삭제했습니다."
+        if memory_id is not None:
+            deleted = await LLMUserMemoryDataSource.delete_user_memory(
+                memory_id,
+                ctx.guild_id,
+                ctx.channel_id,
+                actor.user_id,
             )
-        return f"본인 개인 기억 {deleted_user_memories}개와 개인 말투 설정 {deleted_user_styles}개를 삭제했습니다."
+            return "본인 개인 메모리를 삭제했습니다." if deleted else "삭제할 수 있는 본인 개인 메모리를 찾지 못했습니다."
+
+        deleted_user_memories = await LLMUserMemoryDataSource.delete_user(ctx.guild_id, ctx.channel_id, actor.user_id)
+        return f"본인 개인 메모리 {deleted_user_memories}개를 삭제했습니다."
