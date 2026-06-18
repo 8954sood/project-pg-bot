@@ -114,6 +114,7 @@ class LLMSettings:
     debounce_seconds: float = 2.0
     response_cooldown_seconds: float = 3.0
     max_recent_logs: int = 80
+    max_recent_conversation_lines: int = 12
     max_global_context_chars: int = 3000
     max_participant_context_chars: int = 3000
     max_recent_context_chars: int = 5000
@@ -175,6 +176,7 @@ def load_llm_settings(environ: Mapping[str, str] | None = None) -> LLMSettings:
         debounce_seconds=_float(env.get("LLM_DEBOUNCE_SECONDS", "2"), 2.0),
         response_cooldown_seconds=_float(env.get("LLM_RESPONSE_COOLDOWN_SECONDS", "3"), 3.0),
         max_recent_logs=_int(env.get("LLM_MAX_RECENT_LOGS", "80"), 80),
+        max_recent_conversation_lines=_int(env.get("LLM_MAX_RECENT_CONVERSATION_LINES", "12"), 12),
         max_global_context_chars=_int(env.get("LLM_MAX_GLOBAL_CONTEXT_CHARS", "3000"), 3000),
         max_participant_context_chars=_int(env.get("LLM_MAX_PARTICIPANT_CONTEXT_CHARS", "3000"), 3000),
         max_recent_context_chars=_int(env.get("LLM_MAX_RECENT_CONTEXT_CHARS", "5000"), 5000),

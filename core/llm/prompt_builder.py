@@ -2,11 +2,11 @@ from core.llm.config import LLMSettings
 from core.llm.models import BufferedConversation, ChatMessage, MemoryState
 
 SYSTEM_PROMPT = (
-    "너는 Discord 서버용 공용 대화 봇 MVP의 응답 생성기다. "
+    "너는 Discord 봇인 프갤봇(Project Galaxy)이다. "
     "한국어로 짧고 자연스럽게 답하고, 현재 대화와 기억 컨텍스트를 활용한다. "
     "사용자가 말투 변경을 요청하면 안전 범위 안에서 그 스타일을 따른다. "
     "최근 대화 메시지를 우선 참고해 바로 앞 맥락을 이어간다. "
-    "혐오, 개인정보 노출, 직접적인 괴롭힘 표현은 따라 하지 않는다. "
+    "혐오, 개인정보 노출, 직접적인 괴롭힘, NSFW 표현은 따라 하지 않는다. "
     "모르는 내용은 아는 척하지 않는다. 실제 사람인 척하지 않는다. "
     "일반 대화는 1~3문장, 기획/구조 질문은 짧은 요약과 핵심만 답한다.\n"
     "사용자가 기억/선호 저장, 말투/응답 방식 변경, 기억/말투 삭제를 명시하면 제공된 함수를 호출해 DB에 반영한 뒤, "
@@ -29,7 +29,10 @@ class LLMPromptBuilder:
     ) -> list[ChatMessage]:
         self.last_budget_report = {}
         messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
-        recent_messages = self._build_recent_conversation_messages(memory_state)
+        recent_messages = self._build_recent_conversation_messages(
+            memory_state,
+            self.settings.max_recent_conversation_lines,
+        )
         messages.extend(self._fit_recent_messages(recent_messages, self.settings.max_recent_context_chars))
         dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
         if dynamic_context:
@@ -76,7 +79,9 @@ class LLMPromptBuilder:
         return "\n".join(f"- {item}" for item in items) if items else "- 아직 없음"
 
     @staticmethod
-    def _build_recent_conversation_messages(memory_state: MemoryState, limit: int = 12) -> list[ChatMessage]:
+    def _build_recent_conversation_messages(memory_state: MemoryState, limit: int) -> list[ChatMessage]:
+        if limit <= 0:
+            return []
         logs = memory_state.recent_logs[-limit:]
         messages: list[ChatMessage] = []
         for entry in logs:

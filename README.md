@@ -12,7 +12,7 @@ LLM 상태는 별도 JSON 파일이 아니라 기존 로컬 SQLite DB(`core/loca
 
 허용된 채널에서 처리 대상 메시지를 받으면 먼저 typing indicator를 시작합니다. 채널 단위 debounce buffer가 짧은 시간의 메시지를 묶고, memory extraction job이 진행 중인 같은 guild/channel의 다음 main response는 보류합니다. 다른 채널은 독립적으로 응답할 수 있습니다.
 
-LLM 설정은 `.env.example`을 참고하세요. `LLM_*` 값이 가장 우선이고, 그 다음 `OPENAI_*`, 마지막으로 generic `API_KEY`, `BASE_URL`, `MODEL` 값을 사용합니다. auxiliary memory extraction 설정이 비어 있으면 main LLM 설정을 fallback으로 사용합니다. payload logging은 기본 비활성화이며, 활성화해도 길이 제한과 API key 마스킹을 적용합니다.
+LLM 설정은 `.env.example`을 참고하세요. `LLM_*` 값이 가장 우선이고, 그 다음 `OPENAI_*`, 마지막으로 generic `API_KEY`, `BASE_URL`, `MODEL` 값을 사용합니다. auxiliary memory extraction 설정이 비어 있으면 main LLM 설정을 fallback으로 사용합니다. prompt에 포함할 최근 대화 메시지 수는 `LLM_MAX_RECENT_CONVERSATION_LINES`로 조정하며 기본값은 `12`입니다. payload logging은 기본 비활성화이며, 활성화해도 길이 제한과 API key 마스킹을 적용합니다.
 
 테스트는 실제 Discord 접속 없이 mock/fake 객체를 사용합니다.
 

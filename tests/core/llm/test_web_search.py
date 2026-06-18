@@ -93,12 +93,16 @@ def test_dedupe_results_drops_empty_urls_and_duplicates_and_limits():
 
 
 def test_format_results_empty_and_normal():
-    empty = ws._format_results("q", [])
+    empty = ws._format_results("q", [], [])
     assert 'query="q"' in empty and "결과가 없습니다" in empty
 
-    formatted = ws._format_results("q", [
-        {"title": "T", "url": "https://t.com", "description": "D", "engine": "duckduckgo"},
-    ])
+    formatted = ws._format_results(
+        "q",
+        [
+            {"title": "T", "url": "https://t.com", "description": "D", "engine": "duckduckgo"},
+        ],
+        [],
+    )
     assert 'query="q"' in formatted
     assert "1. T" in formatted
     assert "https://t.com" in formatted
@@ -124,34 +128,41 @@ def test_bing_parser_extracts_results():
     ]
 
 
-def test_run_search_sync_aggregates_dedupes_and_records_errors(monkeypatch):
-    monkeypatch.setattr(
-        ws, "_search_duckduckgo", lambda query, limit: [
+@pytest.mark.asyncio
+async def test_run_search_aggregates_dedupes_and_records_errors(monkeypatch):
+    async def fake_duckduckgo(session, query, limit):
+        return [
             {"title": "DDG", "url": "https://shared.com", "description": "ddg", "engine": "duckduckgo"},
         ]
-    )
-    monkeypatch.setattr(
-        ws, "_search_bing", lambda query, limit: [
+
+    async def fake_bing(session, query, limit):
+        return [
             {"title": "Bing dup", "url": "https://shared.com", "description": "bing", "engine": "bing"},
             {"title": "Bing unique", "url": "https://bing-only.com", "description": "bing2", "engine": "bing"},
         ]
-    )
 
-    out = ws._run_search_sync("q", ["duckduckgo", "bing"], limit=10)
+    monkeypatch.setattr(ws, "_search_duckduckgo", fake_duckduckgo)
+    monkeypatch.setattr(ws, "_search_bing", fake_bing)
+
+    out = await ws._run_search("q", ["duckduckgo", "bing"], limit=10)
     assert "https://shared.com" in out
     assert "https://bing-only.com" in out
     # duplicate URL kept once
     assert out.count("https://shared.com") == 1
 
 
-def test_run_search_sync_reports_engine_errors(monkeypatch):
-    def boom(query, limit):
+@pytest.mark.asyncio
+async def test_run_search_reports_engine_errors(monkeypatch):
+    async def fake_duckduckgo(session, query, limit):
+        return []
+
+    async def boom(session, query, limit):
         raise TimeoutError("slow")
 
-    monkeypatch.setattr(ws, "_search_duckduckgo", lambda query, limit: [])
+    monkeypatch.setattr(ws, "_search_duckduckgo", fake_duckduckgo)
     monkeypatch.setattr(ws, "_search_bing", boom)
 
-    out = ws._run_search_sync("q", ["duckduckgo", "bing"], limit=10)
+    out = await ws._run_search("q", ["duckduckgo", "bing"], limit=10)
     assert "일부 검색엔진 오류" in out
     assert "bing: 검색 시간 초과" in out
 
@@ -176,12 +187,16 @@ async def test_web_search_run_empty_query_returns_error():
 
 @pytest.mark.asyncio
 async def test_web_search_run_returns_formatted_results(monkeypatch):
-    monkeypatch.setattr(
-        ws, "_search_duckduckgo", lambda query, limit: [
+    async def fake_duckduckgo(session, query, limit):
+        return [
             {"title": "PyPI pytest", "url": "https://pypi.org/project/pytest", "description": "pytest pypi", "engine": "duckduckgo"},
         ]
-    )
-    monkeypatch.setattr(ws, "_search_bing", lambda query, limit: [])
+
+    async def fake_bing(session, query, limit):
+        return []
+
+    monkeypatch.setattr(ws, "_search_duckduckgo", fake_duckduckgo)
+    monkeypatch.setattr(ws, "_search_bing", fake_bing)
 
     tool = WebSearchTool()
     out = await tool.run({"query": "python pytest", "limit": 3}, _ctx())
@@ -191,12 +206,16 @@ async def test_web_search_run_returns_formatted_results(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_registry_dispatch_routes_to_web_search(monkeypatch):
-    monkeypatch.setattr(
-        ws, "_search_duckduckgo", lambda query, limit: [
+    async def fake_duckduckgo(session, query, limit):
+        return [
             {"title": "T", "url": "https://t.com", "description": "d", "engine": "duckduckgo"},
         ]
-    )
-    monkeypatch.setattr(ws, "_search_bing", lambda query, limit: [])
+
+    async def fake_bing(session, query, limit):
+        return []
+
+    monkeypatch.setattr(ws, "_search_duckduckgo", fake_duckduckgo)
+    monkeypatch.setattr(ws, "_search_bing", fake_bing)
 
     registry = LLMToolRegistry()
     out = await registry.dispatch("web_search", {"query": "hello", "limit": 1}, ctx=_ctx())

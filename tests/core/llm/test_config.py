@@ -19,6 +19,7 @@ def test_llm_test_compatible_env_names_and_aux_fallback():
             "OPENAI_MAX_TOKENS": "77",
             "LLM_AUX_MODEL": "aux-model",
             "LLM_GUILD_CHANNEL_MAP": "1:2",
+            "LLM_MAX_RECENT_CONVERSATION_LINES": "5",
         }
     )
 
@@ -31,5 +32,5 @@ def test_llm_test_compatible_env_names_and_aux_fallback():
     assert settings.aux.api_key == "openai-key"
     assert settings.aux.base_url == "https://example.test"
     assert settings.aux.model == "aux-model"
+    assert settings.max_recent_conversation_lines == 5
     assert settings.is_allowed("1", "2")
-
