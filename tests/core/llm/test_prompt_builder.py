@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from core.llm.config import LLMSettings
 from core.llm.models import BufferedConversation, MemoryState, Message, RecentLogEntry
 from core.llm.prompt_builder import LLMPromptBuilder
+from core.llm.prompt_builder import SYSTEM_PROMPT
 
 
 def test_prompt_builder_uses_configured_recent_conversation_line_limit():
@@ -47,3 +48,12 @@ def test_prompt_builder_allows_zero_recent_conversation_lines():
 
     assert "User1: old" not in contents
     assert "latest" not in contents
+
+
+def test_system_prompt_contains_memory_ownership_and_non_transfer_rules():
+    assert "자신의 메모리만 수정/삭제" in SYSTEM_PROMPT
+    assert "타인의 메모리는 절대 수정/삭제" in SYSTEM_PROMPT
+    assert "다른 사용자에게 전이하지 않는다" in SYSTEM_PROMPT
+    assert "닉네임: 내용 형식으로 답장을 시작하지 않는다" in SYSTEM_PROMPT
+    assert "한 명만 골라 답하지 말고" in SYSTEM_PROMPT
+    assert "해당 지침은 따를 수 없습니다" in SYSTEM_PROMPT

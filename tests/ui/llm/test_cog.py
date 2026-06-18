@@ -27,7 +27,9 @@ class FakeInteractionResponse:
 
 class FakeInteraction:
     def __init__(self, user_id=3):
-        self.user = SimpleNamespace(id=user_id)
+        self.guild = SimpleNamespace(id=1)
+        self.channel = SimpleNamespace(id=2)
+        self.user = SimpleNamespace(id=user_id, display_name="User")
         self.response = FakeInteractionResponse()
 
 
@@ -153,3 +155,28 @@ async def test_consented_message_is_queued(monkeypatch):
 
     assert channel.typing_calls == 1
     cog.service.enqueue_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_my_memory_commands_use_actor_identity(monkeypatch):
+    cog = make_cog()
+    data_source = SimpleNamespace(
+        list_user=AsyncMock(return_value=[]),
+        add=AsyncMock(return_value=10),
+        update_user_memory=AsyncMock(return_value=True),
+        delete_user_memory=AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(LocalCore, "llmUserMemoryDataSource", data_source)
+    interaction = FakeInteraction(user_id=42)
+
+    await cog.list_my_memory.callback(cog, interaction)
+    data_source.list_user.assert_awaited_once_with("1", "2", "42", include_disabled=True)
+
+    await cog.add_my_memory.callback(cog, interaction, "내 메모리", key="k")
+    data_source.add.assert_awaited_once_with("1", "2", "42", "내 메모리", key="k", user_name="User")
+
+    await cog.edit_my_memory.callback(cog, interaction, 10, "수정", key=None)
+    data_source.update_user_memory.assert_awaited_once_with(10, "1", "2", "42", content="수정", key=None)
+
+    await cog.delete_my_memory.callback(cog, interaction, 10)
+    data_source.delete_user_memory.assert_awaited_once_with(10, "1", "2", "42")

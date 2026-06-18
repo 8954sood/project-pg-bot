@@ -72,6 +72,77 @@ class LLMUserMemoryDataSource:
             return [LLMUserMemory(**row) for row in rows]
 
     @staticmethod
+    async def list_user(guild_id: str, channel_id: str, user_id: str, include_disabled: bool = False) -> list[LLMUserMemory]:
+        async with connect() as db:
+            db.row_factory = aiosqlite.Row
+            clauses = ["guild_id = ?", "channel_id = ?", "user_id = ?"]
+            params: list[object] = [guild_id, channel_id, user_id]
+            if not include_disabled:
+                clauses.append("enabled = 1")
+            cursor = await db.execute(
+                f"""
+                SELECT * FROM llm_user_memories
+                WHERE {' AND '.join(clauses)}
+                ORDER BY importance DESC, id DESC
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+            return [LLMUserMemory(**row) for row in rows]
+
+    @staticmethod
+    async def update_user_memory(
+        memory_id: int,
+        guild_id: str,
+        channel_id: str,
+        user_id: str,
+        *,
+        content: str | None = None,
+        key: str | None = None,
+        importance: int | None = None,
+    ) -> bool:
+        fields: list[str] = []
+        params: list[object] = []
+        if content is not None:
+            fields.append("content = ?")
+            params.append(content)
+        if key is not None:
+            fields.append("key = ?")
+            params.append(key)
+        if importance is not None:
+            fields.append("importance = ?")
+            params.append(importance)
+        if not fields:
+            return False
+        fields.append("updated_at = ?")
+        params.append(utc_now())
+        params.extend([memory_id, guild_id, channel_id, user_id])
+        async with connect() as db:
+            cursor = await db.execute(
+                f"""
+                UPDATE llm_user_memories
+                SET {', '.join(fields)}
+                WHERE id = ? AND guild_id = ? AND channel_id = ? AND user_id = ?
+                """,
+                tuple(params),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    async def delete_user_memory(memory_id: int, guild_id: str, channel_id: str, user_id: str) -> bool:
+        async with connect() as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM llm_user_memories
+                WHERE id = ? AND guild_id = ? AND channel_id = ? AND user_id = ?
+                """,
+                (memory_id, guild_id, channel_id, user_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
     async def delete_user(guild_id: str, channel_id: str, user_id: str) -> int:
         async with connect() as db:
             cursor = await db.execute(

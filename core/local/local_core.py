@@ -6,10 +6,8 @@ from core.local.sleep_timer import SleepTimerDataSource
 from core.local.llm import (
     LLMConsentDataSource,
     LLMGlobalMemoryDataSource,
-    LLMMemoryJobDataSource,
     LLMRecentMessageDataSource,
     LLMServerStateDataSource,
-    LLMSpeechStyleDataSource,
     LLMUserMemoryDataSource,
 )
 
@@ -25,9 +23,7 @@ class LocalCore:
     llmConsentDataSource: LLMConsentDataSource = LLMConsentDataSource
     llmGlobalMemoryDataSource: LLMGlobalMemoryDataSource = LLMGlobalMemoryDataSource
     llmUserMemoryDataSource: LLMUserMemoryDataSource = LLMUserMemoryDataSource
-    llmSpeechStyleDataSource: LLMSpeechStyleDataSource = LLMSpeechStyleDataSource
     llmRecentMessageDataSource: LLMRecentMessageDataSource = LLMRecentMessageDataSource
-    llmMemoryJobDataSource: LLMMemoryJobDataSource = LLMMemoryJobDataSource
     llmServerStateDataSource: LLMServerStateDataSource = LLMServerStateDataSource
 
 
@@ -42,7 +38,5 @@ class LocalCore:
         await LocalCore.llmConsentDataSource.init_table()
         await LocalCore.llmGlobalMemoryDataSource.init_table()
         await LocalCore.llmUserMemoryDataSource.init_table()
-        await LocalCore.llmSpeechStyleDataSource.init_table()
         await LocalCore.llmRecentMessageDataSource.init_table()
-        await LocalCore.llmMemoryJobDataSource.init_table()
         await LocalCore.llmServerStateDataSource.init_table()

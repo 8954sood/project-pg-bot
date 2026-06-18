@@ -44,18 +44,6 @@ class LLMUserMemory:
 
 
 @dataclass(slots=True)
-class LLMSpeechStyle:
-    guild_id: str
-    channel_id: str
-    user_id: str
-    user_name: str
-    notes: str
-    phrases: str
-    style_summary: str
-    updated_at: str
-
-
-@dataclass(slots=True)
 class LLMServerState:
     guild_id: str
     channel_id: str
@@ -77,16 +65,3 @@ class LLMRecentMessage:
     role: str
     content: str
     created_at: str
-
-
-@dataclass(slots=True)
-class LLMMemoryJobState:
-    guild_id: str
-    channel_id: str
-    running: int
-    pending_job_id: Optional[str]
-    started_at: Optional[str]
-    turns_since_last_memory_extraction: int
-    memory_extraction_cooldown_turns: int
-    last_memory_extraction_had_changes: int
-    updated_at: str
