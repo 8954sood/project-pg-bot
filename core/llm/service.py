@@ -11,6 +11,7 @@ from core.llm.config import LLMSettings
 from core.llm.engine import LLMEngine
 from core.llm.memory_extractor import LLMMemoryExtractor
 from core.llm.memory_policy import MemoryExtractionPolicy
+from core.llm.llm_client import OpenAICompatibleClient
 from core.llm.models import (
     BufferedConversation,
     LLMBufferedMessage,
@@ -25,6 +26,7 @@ from core.llm.models import (
     UserMemory,
     UserStyleProfile,
 )
+from core.llm.tool_planner import LLMToolPlanner
 from core.llm.tool_registry import LLMToolRegistry
 from core.local.llm import (
     LLMGlobalMemoryDataSource,
@@ -54,7 +56,12 @@ class LLMService:
         self.settings = settings
         self.engine = engine or LLMEngine(settings)
         self.extractor = extractor
-        self.tools = tools or LLMToolRegistry()
+        self.tools = tools or LLMToolRegistry(
+            LLMToolPlanner(
+                OpenAICompatibleClient(settings.payload_logging, purpose="tool_planning"),
+                settings.aux,
+            )
+        )
         self.sleep = sleep
         self.buffers: dict[tuple[str, str], list[LLMBufferedMessage]] = defaultdict(list)
         self.completions: dict[tuple[str, str], list[CompleteMessage]] = defaultdict(list)

@@ -55,7 +55,7 @@ def parse_guild_channel_map(raw: str) -> dict[str, set[str]]:
 
 @dataclass(frozen=True, slots=True)
 class LLMProviderConfig:
-    api_key: str = ""
+    api_key: str = field(default="", repr=False)
     base_url: str = "https://api.openai.com/v1"
     model: str = ""
     timeout_seconds: float = 60.0
