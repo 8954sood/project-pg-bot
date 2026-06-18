@@ -12,6 +12,7 @@ EXTENSIONS = (
     "ui.role.cog",
     "ui.emoji.cog",
     "ui.cog_manager.cog",
+    "ui.llm.cog",
 )
 
 
@@ -27,4 +28,3 @@ async def load_extensions(bot: commands.Bot) -> None:
 async def sync_commands(bot: commands.Bot, guild_id: int) -> None:
     bot.tree.copy_global_to(guild=discord.Object(id=guild_id))
     await bot.tree.sync()
-
