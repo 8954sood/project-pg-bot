@@ -105,7 +105,8 @@ async def test_live_env_llm_planner_driven_tool_calls(tmp_path, monkeypatch):
     settings = live_settings()
 
     chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_test")
-    # Default tools use a real LLMToolPlanner against settings.aux.
+    # Default engine uses a real LLMToolRegistry (save_memory/save_style/clear_memory)
+    # driven by MAIN LLM native function-calling against settings.main.
     service = LLMService(settings, engine=LLMEngine(settings, chat_client), extractor=None, sleep=_noop_sleep)
     key = ("live-guild", "live-channel")
     admin_id, admin_name = "live-admin", "AdminHoRPG"

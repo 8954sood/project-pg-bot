@@ -11,7 +11,6 @@ from core.llm.config import LLMSettings
 from core.llm.engine import LLMEngine
 from core.llm.memory_extractor import LLMMemoryExtractor
 from core.llm.memory_policy import MemoryExtractionPolicy
-from core.llm.llm_client import OpenAICompatibleClient
 from core.llm.models import (
     BufferedConversation,
     LLMBufferedMessage,
@@ -22,11 +21,9 @@ from core.llm.models import (
     RecentLogEntry,
     ServerMemory,
     ServerStyleProfile,
-    ToolResult,
     UserMemory,
     UserStyleProfile,
 )
-from core.llm.tool_planner import LLMToolPlanner
 from core.llm.tool_registry import LLMToolRegistry
 from core.local.llm import (
     LLMGlobalMemoryDataSource,
@@ -54,14 +51,9 @@ class LLMService:
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
     ):
         self.settings = settings
-        self.engine = engine or LLMEngine(settings)
+        self.tools = tools or LLMToolRegistry()
+        self.engine = engine or LLMEngine(settings, tools=self.tools)
         self.extractor = extractor
-        self.tools = tools or LLMToolRegistry(
-            LLMToolPlanner(
-                OpenAICompatibleClient(settings.payload_logging, purpose="tool_planning"),
-                settings.aux,
-            )
-        )
         self.sleep = sleep
         self.buffers: dict[tuple[str, str], list[LLMBufferedMessage]] = defaultdict(list)
         self.completions: dict[tuple[str, str], list[CompleteMessage]] = defaultdict(list)
@@ -135,21 +127,12 @@ class LLMService:
                     closed_at=datetime.now(timezone.utc),
                 )
                 memory_state = await self._load_memory_state(guild_id, channel_id, conversation.participants)
-                tool_results = await self.tools.run_planned_tools(
-                    guild_id=guild_id,
-                    channel_id=channel_id,
-                    current_buffer=current,
-                    memory_state=memory_state,
-                )
-                terminal_result = next((result for result in tool_results if result.data.get("terminal_response")), None)
-                if terminal_result is not None:
-                    await send_response(terminal_result.content)
-                    await self._record_recent(guild_id, channel_id, current, terminal_result.content)
-                    return
                 response_text = await self.engine.respond(
                     conversation=conversation,
                     memory_state=memory_state,
-                    tool_results=tool_results,
+                    actor=current[-1],
+                    guild_id=guild_id,
+                    channel_id=channel_id,
                 )
                 await send_response(response_text)
                 await self._record_recent(guild_id, channel_id, current, response_text)

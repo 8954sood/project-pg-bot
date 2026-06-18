@@ -1,14 +1,16 @@
 from core.llm.config import LLMSettings
-from core.llm.models import BufferedConversation, ChatMessage, MemoryState, ToolResult
+from core.llm.models import BufferedConversation, ChatMessage, MemoryState
 
 SYSTEM_PROMPT = (
     "너는 Discord 서버용 공용 대화 봇 MVP의 응답 생성기다. "
-    "한국어로 짧고 자연스럽게 답하고, 현재 대화/기억/tool 결과를 구분해서 사용한다. "
+    "한국어로 짧고 자연스럽게 답하고, 현재 대화와 기억 컨텍스트를 활용한다. "
     "사용자가 말투 변경을 요청하면 안전 범위 안에서 그 스타일을 따른다. "
     "최근 대화 메시지를 우선 참고해 바로 앞 맥락을 이어간다. "
     "혐오, 개인정보 노출, 직접적인 괴롭힘 표현은 따라 하지 않는다. "
     "모르는 내용은 아는 척하지 않는다. 실제 사람인 척하지 않는다. "
-    "일반 대화는 1~3문장, 기획/구조 질문은 짧은 요약과 핵심만 답한다."
+    "일반 대화는 1~3문장, 기획/구조 질문은 짧은 요약과 핵심만 답한다.\n"
+    "사용자가 기억/선호 저장, 말투/응답 방식 변경, 기억/말투 삭제를 명시하면 제공된 함수를 호출해 DB에 반영한 뒤, "
+    "그 결과를 바탕으로 최종 답변을 생성한다. 일반 대화/질문에는 함수를 호출하지 않는다."
 )
 
 
@@ -22,18 +24,14 @@ class LLMPromptBuilder:
         *,
         conversation: BufferedConversation,
         memory_state: MemoryState,
-        tool_results: list[ToolResult] | None = None,
     ) -> list[ChatMessage]:
         self.last_budget_report = {}
-        tool_results = tool_results or []
         messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
         recent_messages = self._build_recent_conversation_messages(memory_state)
         messages.extend(self._fit_recent_messages(recent_messages, self.settings.max_recent_context_chars))
         dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
         if dynamic_context:
             messages.append(ChatMessage(role="user", content=dynamic_context))
-        if tool_results:
-            messages.append(self._build_tool_result_message(tool_results))
         messages.append(self._build_current_buffer_message(conversation))
         return messages
 
@@ -61,10 +59,6 @@ class LLMPromptBuilder:
         )
         return server_context + "\n\n" + participant_context
 
-    def _build_tool_result_message(self, tool_results: list[ToolResult]) -> ChatMessage:
-        tool_text = self._clip("tool_context", "[Tool 결과]\n" + self._tool_text(tool_results), self.settings.max_tool_context_chars)
-        return ChatMessage(role="user", content=tool_text)
-
     def _build_current_buffer_message(self, conversation: BufferedConversation) -> ChatMessage:
         header = "[현재 버퍼]\n"
         current_buffer = header + self._clip(
@@ -78,12 +72,6 @@ class LLMPromptBuilder:
     @staticmethod
     def _bullet(items: list[str]) -> str:
         return "\n".join(f"- {item}" for item in items) if items else "- 아직 없음"
-
-    @staticmethod
-    def _tool_text(results: list[ToolResult]) -> str:
-        if not results:
-            return "- 사용한 tool 없음"
-        return "\n".join(f"- {result.name}: {result.content}" for result in results)
 
     @staticmethod
     def _build_recent_conversation_messages(memory_state: MemoryState, limit: int = 12) -> list[ChatMessage]:

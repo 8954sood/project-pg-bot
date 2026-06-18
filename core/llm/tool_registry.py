@@ -1,7 +1,7 @@
 import re
-from typing import Protocol
+from typing import Any
 
-from core.llm.models import LLMBufferedMessage, MemoryState, ToolResult
+from core.llm.models import LLMBufferedMessage, ToolResult
 from core.local.llm import (
     LLMGlobalMemoryDataSource,
     LLMServerStateDataSource,
@@ -10,46 +10,89 @@ from core.local.llm import (
 )
 
 
-class ToolPlanner(Protocol):
-    async def plan(self, text: str, is_admin: bool, memory_state: MemoryState): ...
-
-
 class LLMToolRegistry:
-    def __init__(self, planner: ToolPlanner | None = None):
-        self.planner = planner
+    """Exposes function-calling tool definitions and dispatches MAIN LLM tool calls to DB ops."""
 
-    async def run_planned_tools(
+    SAVE_SCOPE_DESCRIPTION = "user=해당 발화자 개인 저장, server=서버/채널 전역 저장(관리자만). 명시가 없으면 user."
+
+    def tool_definitions(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_memory",
+                    "description": (
+                        "사용자가 장기 기억/선호/정보/규칙을 저장하라고 명시했을 때 호출한다. "
+                        "사용자 원문 그대로보다 봇이 저장할 핵심을 짧은 문장으로 정리해 note에 넣는다."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "note": {"type": "string", "description": "DB에 저장할 기억 내용"},
+                            "scope": {"type": "string", "enum": ["user", "server"], "description": self.SAVE_SCOPE_DESCRIPTION},
+                        },
+                        "required": ["note", "scope"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "save_style",
+                    "description": (
+                        "사용자가 봇의 말투/어조/응답 방식을 변경/적용/업데이트하라고 명시했을 때 호출한다. "
+                        "note에 봇이 따를 말투 지시를 짧게 정리한다(예: '용용체로 답한다')."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "note": {"type": "string", "description": "봇이 따를 말투/응답 지시"},
+                            "scope": {"type": "string", "enum": ["user", "server"], "description": self.SAVE_SCOPE_DESCRIPTION},
+                        },
+                        "required": ["note", "scope"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "clear_memory",
+                    "description": (
+                        "사용자가 기억/말투를 삭제/초기화/비우/리셋하라고 명시했을 때 호출한다. "
+                        "저장된 기억과 말투 설정을 함께 지운다."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "scope": {"type": "string", "enum": ["user", "server"], "description": self.SAVE_SCOPE_DESCRIPTION},
+                        },
+                        "required": ["scope"],
+                    },
+                },
+            },
+        ]
+
+    async def dispatch(
         self,
+        name: str,
+        arguments: dict[str, Any],
         *,
-        guild_id: str,
-        channel_id: str,
-        current_buffer: list[LLMBufferedMessage],
-        memory_state: MemoryState,
-    ) -> list[ToolResult]:
-        if not current_buffer or self.planner is None:
-            return []
-        text = "\n".join(message.content for message in current_buffer)
-        actor = current_buffer[-1]
-        plans = await self.planner.plan(text, actor.is_admin, memory_state)
-        results: list[ToolResult] = []
-        for plan in plans:
-            if plan.is_noop:
-                continue
-            if plan.tool == "clear_memory":
-                return [await self._clear_memory_or_style(guild_id, channel_id, actor, plan.scope)]
-            if plan.tool == "update_memory":
-                results.append(
-                    await self._update_memory(guild_id, channel_id, actor, plan.scope, plan.note or self._clean_note(text))
-                )
-            elif plan.tool == "update_style":
-                results.append(
-                    await self._update_style(guild_id, channel_id, actor, plan.scope, plan.note or self._clean_note(text))
-                )
-        return results[:6]
-
-    async def collect_context(self, **kwargs: object) -> str:
-        results = await self.run_planned_tools(**kwargs)
-        return "\n".join(f"- {result.name}: {result.content}" for result in results)
+        ctx: dict[str, Any],
+    ) -> str:
+        guild_id = str(ctx["guild_id"])
+        channel_id = str(ctx["channel_id"])
+        actor = ctx["actor"]
+        scope = str(arguments.get("scope", "user")).lower()
+        if scope not in {"user", "server"}:
+            scope = "user"
+        note = str(arguments.get("note", "") or "").strip()
+        if name == "save_memory":
+            return (await self._update_memory(guild_id, channel_id, actor, scope, note)).content
+        if name == "save_style":
+            return (await self._update_style(guild_id, channel_id, actor, scope, note)).content
+        if name == "clear_memory":
+            return (await self._clear_memory_or_style(guild_id, channel_id, actor, scope)).content
+        return f"알 수 없는 툴: {name}"
 
     async def _clear_memory_or_style(
         self,
@@ -65,7 +108,7 @@ class LLMToolRegistry:
                 name="clear_memory_or_style",
                 ok=True,
                 content=f"서버/채널 전역 기억 {deleted_memories}개와 서버 말투 설정을 삭제했습니다.",
-                data={"terminal_response": True, "scope": "server", "deleted_memories": deleted_memories},
+                data={"scope": "server", "deleted_memories": deleted_memories},
             )
 
         deleted_user_memories = await LLMUserMemoryDataSource.delete_user(guild_id, channel_id, actor.user_id)
@@ -82,7 +125,6 @@ class LLMToolRegistry:
             ok=True,
             content=content,
             data={
-                "terminal_response": True,
                 "scope": "user",
                 "deleted_user_memories": deleted_user_memories,
                 "deleted_user_styles": deleted_user_styles,

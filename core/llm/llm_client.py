@@ -4,10 +4,11 @@ import logging
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from core.llm.config import LLMProviderConfig, LLMPayloadLoggingConfig
+from core.llm.models import ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 class LLMClientResponse:
     content: str
     provider_path: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 class LLMClientError(RuntimeError):
@@ -27,7 +29,14 @@ class OpenAICompatibleClient:
         self.payload_logging = payload_logging
         self.purpose = purpose
 
-    async def chat(self, config: LLMProviderConfig, messages: list[dict[str, str]]) -> LLMClientResponse:
+    async def chat(
+        self,
+        config: LLMProviderConfig,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str = "auto",
+    ) -> LLMClientResponse:
         if not config.api_key:
             raise LLMClientError("LLM API key is not configured")
         if not config.model:
@@ -36,7 +45,7 @@ class OpenAICompatibleClient:
         last_error: Exception | None = None
         for path in paths:
             try:
-                return await asyncio.to_thread(self._post_chat, config, path, messages)
+                return await asyncio.to_thread(self._post_chat, config, path, messages, tools, tool_choice)
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -58,7 +67,14 @@ class OpenAICompatibleClient:
             return [base + "/chat/completions"]
         return [base + "/v1/chat/completions", base + "/api/chat"]
 
-    def _post_chat(self, config: LLMProviderConfig, url: str, messages: list[dict[str, str]]) -> LLMClientResponse:
+    def _post_chat(
+        self,
+        config: LLMProviderConfig,
+        url: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        tool_choice: str,
+    ) -> LLMClientResponse:
         payload: dict[str, Any]
         if url.endswith("/api/chat"):
             payload = {
@@ -74,6 +90,9 @@ class OpenAICompatibleClient:
                 "temperature": config.temperature,
                 "max_tokens": config.max_tokens,
             }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = tool_choice
         encoded = json.dumps(payload).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if config.api_key:
@@ -98,14 +117,49 @@ class OpenAICompatibleClient:
         )
         data = json.loads(raw)
         if "choices" in data:
-            return LLMClientResponse(content=data["choices"][0]["message"]["content"], provider_path=url)
+            message = data["choices"][0]["message"]
+            return LLMClientResponse(
+                content=message.get("content") or "",
+                provider_path=url,
+                tool_calls=self._parse_tool_calls(message.get("tool_calls")),
+            )
         if "message" in data:
-            return LLMClientResponse(content=data["message"]["content"], provider_path=url)
+            message = data["message"]
+            return LLMClientResponse(
+                content=message.get("content") or "",
+                provider_path=url,
+                tool_calls=self._parse_tool_calls(message.get("tool_calls")),
+            )
         if isinstance(data.get("response"), str):
             return LLMClientResponse(content=data["response"], provider_path=url)
         raise LLMClientError("Unsupported LLM response shape")
 
-    def _log_request(self, config: LLMProviderConfig, messages: list[dict[str, str]]) -> None:
+    @staticmethod
+    def _parse_tool_calls(raw: object) -> list[ToolCall]:
+        if not isinstance(raw, list):
+            return []
+        calls: list[ToolCall] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            function = item.get("function") if isinstance(item.get("function"), dict) else item
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name", "")).strip()
+            if not name:
+                continue
+            arguments = function.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments) if arguments.strip() else {}
+                except json.JSONDecodeError:
+                    arguments = {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            calls.append(ToolCall(name=name, arguments=arguments))
+        return calls
+
+    def _log_request(self, config: LLMProviderConfig, messages: list[dict[str, Any]]) -> None:
         approx = sum(len(message.get("content", "")) for message in messages)
         extra: dict[str, object] = {
             "model": config.model,
