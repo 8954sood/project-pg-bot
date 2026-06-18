@@ -5,7 +5,7 @@ from core.llm.tools.base import (
     ToolContext,
     register_tool,
 )
-from core.llm.tools import save_memory, save_style, clear_memory  # noqa: F401 (registration trigger)
+from core.llm.tools import save_memory, save_style, clear_memory, web_search  # noqa: F401 (registration trigger)
 
 __all__ = [
     "LLMTool",
