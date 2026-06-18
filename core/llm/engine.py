@@ -7,7 +7,7 @@ from core.llm.config import LLMSettings
 from core.llm.llm_client import OpenAICompatibleClient
 from core.llm.models import BufferedConversation, LLMBufferedMessage, MemoryState
 from core.llm.prompt_builder import LLMPromptBuilder
-from core.llm.tool_registry import LLMToolRegistry
+from core.llm.tools import LLMToolRegistry, ToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ class LLMEngine:
             for message in self.prompt_builder.build_messages(conversation=conversation, memory_state=memory_state)
         ]
         tools = self.tools.tool_definitions()
-        ctx = {"guild_id": guild_id, "channel_id": channel_id, "actor": actor}
+        ctx = ToolContext(guild_id=guild_id, channel_id=channel_id, actor=actor)
         loop_messages: list[dict[str, Any]] = []
         last_content = ""
 

@@ -24,7 +24,7 @@ from core.llm.models import (
     UserMemory,
     UserStyleProfile,
 )
-from core.llm.tool_registry import LLMToolRegistry
+from core.llm.tools import LLMToolRegistry
 from core.local.llm import (
     LLMGlobalMemoryDataSource,
     LLMMemoryJobDataSource,

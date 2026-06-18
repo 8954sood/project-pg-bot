@@ -7,7 +7,7 @@ from core.llm.engine import LLMEngine
 from core.llm.llm_client import LLMClientResponse
 from core.llm.models import LLMBufferedMessage, LLMInputMessage, MemoryExtractionResult, ToolCall
 from core.llm.service import LLMService
-from core.llm.tool_registry import LLMToolRegistry
+from core.llm.tools import LLMToolRegistry
 from core.local import LocalCore
 from core.local import path as path_module
 
