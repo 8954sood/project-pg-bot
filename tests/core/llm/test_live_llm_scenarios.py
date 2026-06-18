@@ -174,3 +174,25 @@ async def test_live_env_llm_planner_driven_tool_calls(tmp_path, monkeypatch):
     state = await LocalCore.llmServerStateDataSource.get(*key)
     assert global_final == [], "admin clear must remove all server memory"
     assert state.active_style_directive == "", "admin clear must reset server style"
+
+
+@pytest.mark.asyncio
+async def test_live_env_llm_infers_memory_from_context(tmp_path, monkeypatch):
+    """'기억해줘.' without an explicit object infers the memory from prior context and saves it."""
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "live-infer.sqlite"))
+    await LocalCore.init_tables()
+    settings = live_settings()
+
+    chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_infer")
+    service = LLMService(settings, engine=LLMEngine(settings, chat_client), extractor=None, sleep=_noop_sleep)
+    key = ("live-guild", "live-channel")
+    user_id, user_name = "live-user-a", "BabiHova"
+
+    await _say(service, key, user_id, user_name, "오버워치는 개쩌는거야 알겠지?", is_admin=False)
+    await _say(service, key, user_id, user_name, "기억해줘.", is_admin=False)
+
+    user_memories = await LocalCore.llmUserMemoryDataSource.list_for_users(*key, [user_id])
+    assert user_memories, "MAIN should infer the memory from context and call save_memory"
+    assert any("오버워치" in m.content for m in user_memories), (
+        f"inferred memory should reference 오버워치: {[m.content for m in user_memories]!r}"
+    )
