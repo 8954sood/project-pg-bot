@@ -69,7 +69,11 @@ class LLMCog(commands.Cog):
             await self.typing.start(guild_id, channel_id, message.channel)
 
             async def send_response(content: str) -> None:
-                await message.channel.send(content)
+                reply_text = content.strip() or "응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요."
+                try:
+                    await message.reply(reply_text, mention_author=False)
+                except Exception:
+                    await message.channel.send(reply_text)
 
             async def complete_message() -> None:
                 await self.typing.stop(guild_id, channel_id)

@@ -1,3 +1,5 @@
+import asyncio
+import importlib
 import os
 from dataclasses import replace
 
@@ -11,6 +13,8 @@ from core.llm.models import LLMInputMessage
 from core.llm.service import LLMService
 from core.local import LocalCore
 from core.local import path as path_module
+
+web_search_module = importlib.import_module("core.llm.tools.web_search")
 
 
 async def _noop_sleep(_):
@@ -39,6 +43,21 @@ def live_settings():
     )
 
 
+def live_runtime_settings():
+    load_dotenv(".env", override=False)
+    if os.environ.get("RUN_LIVE_LLM_TESTS", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        pytest.skip("set RUN_LIVE_LLM_TESTS=1 to call the real LLM provider from .env")
+    settings = load_llm_settings()
+    if not settings.main.api_key or not settings.main.model:
+        pytest.skip(".env must define LLM_API_KEY and LLM_MODEL for live LLM integration tests")
+    return replace(
+        settings,
+        payload_logging=LLMPayloadLoggingConfig(log_payloads=False),
+        debounce_seconds=0,
+        response_cooldown_seconds=0,
+    )
+
+
 async def _say(service, key, user_id, name, content, *, is_admin=False):
     """Run one user utterance through the real LLM+planner and return the bot reply."""
     sent: list[str] = []
@@ -54,6 +73,23 @@ async def _say(service, key, user_id, name, content, *, is_admin=False):
     service.flush_tasks[key].cancel()
     await service.flush(key, send)
     return sent[-1] if sent else ""
+
+
+async def _say_all(service, key, user_id, name, content, *, is_admin=False):
+    """Run one user utterance and return every message the service tried to send."""
+    sent: list[str] = []
+
+    async def send(content: str):
+        sent.append(content)
+
+    await service.enqueue_message(
+        LLMInputMessage(key[0], key[1], user_id, name, content, is_admin=is_admin),
+        send_response=send,
+        complete_message=_noop_complete,
+    )
+    service.flush_tasks[key].cancel()
+    await service.flush(key, send)
+    return sent
 
 
 @pytest.mark.asyncio
@@ -159,3 +195,112 @@ async def test_live_env_llm_infers_memory_from_context(tmp_path, monkeypatch):
     assert any("오버워치" in m.content for m in user_memories), (
         f"inferred memory should reference 오버워치: {[m.content for m in user_memories]!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_live_env_maple_search_then_dnftopic_does_not_drop_first_reply(tmp_path, monkeypatch):
+    """Reproduce the reported Discord sequence with the real provider and real web_search tool."""
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "live-dropped-reply.sqlite"))
+    await LocalCore.init_tables()
+    settings = live_runtime_settings()
+
+    chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_dropped_reply")
+    service = LLMService(settings, engine=LLMEngine(settings, chat_client), sleep=_noop_sleep)
+    key = ("live-guild", "live-channel")
+    user_id, user_name = "464712715487805442", "바비호바"
+    await LocalCore.llmUserMemoryDataSource.add(
+        key[0],
+        key[1],
+        user_id,
+        "사용자는 프갤봇의 창조주라고 주장한다.",
+        user_name=user_name,
+    )
+    await LocalCore.llmUserMemoryDataSource.add(
+        key[0],
+        key[1],
+        user_id,
+        "사용자는 섹현쿤을 엘소드의 신이라고 생각한다.",
+        user_name=user_name,
+    )
+
+    first_sent = await _say_all(
+        service,
+        key,
+        user_id,
+        user_name,
+        "웹에서 메이플 신규 캐릭터 나왔다는데 조사해줘",
+        is_admin=False,
+    )
+    second_sent = await _say_all(
+        service,
+        key,
+        user_id,
+        user_name,
+        "아 던파에서 뭐더라",
+        is_admin=False,
+    )
+
+    assert first_sent, "first utterance produced no Discord send attempt"
+    assert first_sent[-1].strip(), f"first reply was blank after live web_search tool round: {first_sent!r}"
+    assert second_sent, "second utterance produced no Discord send attempt"
+    assert second_sent[-1].strip(), f"second reply was blank: {second_sent!r}"
+
+
+@pytest.mark.asyncio
+async def test_live_env_second_message_during_web_search_replies_to_both_messages(tmp_path, monkeypatch):
+    """Use the real provider for tool planning, then block web_search to reproduce the race."""
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "live-tool-race.sqlite"))
+    await LocalCore.init_tables()
+    settings = live_runtime_settings()
+    tool_started = asyncio.Event()
+    release_tool = asyncio.Event()
+
+    async def blocking_search(query, engines, limit):
+        tool_started.set()
+        await release_tool.wait()
+        return (
+            '웹 검색 결과 query="메이플스토리 신규 캐릭터 최신 정보"\n'
+            "1. 메이플스토리 신규 직업 레테\n"
+            "   url: https://example.test/maple-lete\n"
+            "   engine: fake\n"
+            "   description: 신규 직업 레테가 공개되었습니다."
+        )
+
+    monkeypatch.setattr(web_search_module, "_run_search", blocking_search)
+    chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_tool_race")
+    service = LLMService(settings, engine=LLMEngine(settings, chat_client), sleep=_noop_sleep)
+    key = ("live-guild", "live-channel")
+    user_id, user_name = "464712715487805442", "바비호바"
+    sent: list[str] = []
+
+    async def send(content: str):
+        sent.append(content)
+
+    await service.enqueue_message(
+        LLMInputMessage(
+            key[0],
+            key[1],
+            user_id,
+            user_name,
+            "웹에서 메이플 신규 캐릭터 나왔다는데 조사해줘",
+            is_admin=False,
+        ),
+        send_response=send,
+        complete_message=_noop_complete,
+    )
+    await asyncio.wait_for(tool_started.wait(), timeout=30)
+    first_task = service.flush_tasks[key]
+
+    await service.enqueue_message(
+        LLMInputMessage(key[0], key[1], user_id, user_name, "아 던파에서 뭐더라", is_admin=False),
+        send_response=send,
+        complete_message=_noop_complete,
+    )
+    release_tool.set()
+    await first_task
+    next_task = service.flush_tasks.get(key)
+    if next_task is not None and next_task is not first_task:
+        await next_task
+
+    assert len(sent) == 2
+    assert all(reply.strip() for reply in sent)

@@ -51,9 +51,23 @@ class FakeChannel:
         return sent_message
 
 
-def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None):
+class FakeMessage(SimpleNamespace):
+    def __init__(self, *, fail_reply=False, **kwargs):
+        super().__init__(**kwargs)
+        self.fail_reply = fail_reply
+        self.replies = []
+
+    async def reply(self, *args, **kwargs):
+        if self.fail_reply:
+            raise RuntimeError("reply failed")
+        self.replies.append((args, kwargs))
+        return FakeSentMessage()
+
+
+def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None, fail_reply=False):
     channel = channel or FakeChannel()
-    return SimpleNamespace(
+    return FakeMessage(
+        fail_reply=fail_reply,
         guild=SimpleNamespace(id=guild_id),
         channel=channel,
         author=SimpleNamespace(
@@ -155,6 +169,38 @@ async def test_consented_message_is_queued(monkeypatch):
 
     assert channel.typing_calls == 1
     cog.service.enqueue_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_response_replies_to_source_message(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel)
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+    send_response = cog.service.enqueue_message.await_args.kwargs["send_response"]
+    await send_response("hello")
+
+    assert message.replies == [(("hello",), {"mention_author": False})]
+    assert channel.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_response_falls_back_to_channel_send_when_reply_fails(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel, fail_reply=True)
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+    send_response = cog.service.enqueue_message.await_args.kwargs["send_response"]
+    await send_response("   ")
+
+    assert message.replies == []
+    assert channel.sent == [(("응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요.",), {})]
 
 
 @pytest.mark.asyncio
