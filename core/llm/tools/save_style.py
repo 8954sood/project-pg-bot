@@ -1,20 +1,19 @@
-from core.llm.tools.base import SAVE_SCOPE_DESCRIPTION, LLMTool, ToolContext
+from core.llm.tools.base import LLMTool, ToolContext
 from core.local.llm import LLMUserMemoryDataSource
 
 
 class SaveStyleTool(LLMTool):
     name = "save_style"
     description = (
-        "Deprecated compatibility tool. 말투/어조/응답 방식 변경 요청을 해당 발화자 본인의 개인 메모리에 저장한다. "
-        "서버 말투, 서버 메모리, 타인의 메모리는 절대 수정하지 않는다."
+        "Deprecated compatibility tool. Save the speaking user's tone, style, or response-format preference "
+        "as actor-owned personal memory."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "note": {"type": "string", "description": "봇이 따를 말투/응답 지시"},
-            "scope": {"type": "string", "enum": ["user", "server"], "description": SAVE_SCOPE_DESCRIPTION},
+            "note": {"type": "string", "description": "Personal tone or response-format preference to store."},
         },
-        "required": ["note", "scope"],
+        "required": ["note"],
     }
 
     async def run(self, arguments: dict, ctx: ToolContext) -> str:

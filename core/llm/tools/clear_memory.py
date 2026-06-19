@@ -1,4 +1,4 @@
-from core.llm.tools.base import SAVE_SCOPE_DESCRIPTION, LLMTool, ToolContext, register_tool
+from core.llm.tools.base import LLMTool, ToolContext, register_tool
 from core.local.llm import LLMUserMemoryDataSource
 
 
@@ -6,15 +6,19 @@ from core.local.llm import LLMUserMemoryDataSource
 class ClearMemoryTool(LLMTool):
     name = "clear_memory"
     description = (
-        "사용자가 본인 개인 메모리/말투/호칭/응답 포맷을 삭제/초기화/비우/리셋하라고 명시했을 때 호출한다. "
-        "memory_id가 있으면 해당 id의 본인 개인 메모리만 삭제하고, 없으면 본인 개인 메모리를 모두 삭제한다. "
-        "서버 메모리와 타인의 메모리는 절대 삭제하지 않는다."
+        "Call when the user explicitly asks to delete, clear, reset, or remove their own personal memory, tone, "
+        "nickname, or response-format preferences. "
+        "If memory_id is provided, delete only that actor-owned personal memory. "
+        "If memory_id is omitted, delete all personal memories owned by the actor. "
+        "This is a personal-memory tool for actor-owned personal memories only."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "scope": {"type": "string", "enum": ["user", "server"], "description": SAVE_SCOPE_DESCRIPTION},
-            "memory_id": {"type": "integer", "description": "삭제할 본인 개인 메모리 id. 생략하면 본인 개인 메모리 전체 삭제."},
+            "memory_id": {
+                "type": "integer",
+                "description": "Actor-owned personal memory id to delete. Omit to delete all actor-owned personal memories.",
+            },
         },
         "required": [],
     }

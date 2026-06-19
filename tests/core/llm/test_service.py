@@ -301,6 +301,108 @@ async def test_server_scope_save_memory_tool_saves_actor_user_memory_only(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_edit_memory_tool_updates_matching_actor_memory(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
+    await LocalCore.init_tables()
+    memory_id = await LocalCore.llmUserMemoryDataSource.add(
+        "1",
+        "2",
+        "user",
+        "사용자는 오버워치를 좋아한다",
+        user_name="User",
+    )
+    client = FakeClient(
+        responses=[
+            (
+                "",
+                [
+                    ToolCall(
+                        "edit_memory",
+                        {"note": "사용자는 마비노기를 좋아한다", "match_query": "오버워치"},
+                    ),
+                ],
+            ),
+            ("수정했어.", []),
+        ]
+    )
+    service = make_service(client)
+    sent = []
+
+    async def send(content):
+        sent.append(content)
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "내가 좋아하는 게임 오버워치 말고 마비노기로 수정해줘.", is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+
+    user_memories = await LocalCore.llmUserMemoryDataSource.list_for_users("1", "2", ["user"])
+    assert sent[-1] == "수정했어."
+    assert [(memory.id, memory.content) for memory in user_memories] == [(memory_id, "사용자는 마비노기를 좋아한다")]
+
+
+@pytest.mark.asyncio
+async def test_edit_memory_tool_does_not_update_other_user_memory_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
+    await LocalCore.init_tables()
+    other_id = await LocalCore.llmUserMemoryDataSource.add("1", "2", "other", "타인 기억", user_name="Other")
+    client = FakeClient(
+        responses=[
+            ("", [ToolCall("edit_memory", {"memory_id": other_id, "note": "내 기억으로 바꿔줘"})]),
+            ("타인 기억은 수정할 수 없어.", []),
+        ]
+    )
+    service = make_service(client)
+    sent = []
+
+    async def send(content):
+        sent.append(content)
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "저 메모리 내 걸로 수정해줘.", is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+
+    other_memories = await LocalCore.llmUserMemoryDataSource.list_for_users("1", "2", ["other"])
+    actor_memories = await LocalCore.llmUserMemoryDataSource.list_for_users("1", "2", ["user"])
+    assert sent[-1] == "타인 기억은 수정할 수 없어."
+    assert [(memory.id, memory.content) for memory in other_memories] == [(other_id, "타인 기억")]
+    assert actor_memories == []
+
+
+@pytest.mark.asyncio
+async def test_edit_memory_tool_adds_actor_memory_when_no_match_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
+    await LocalCore.init_tables()
+    client = FakeClient(
+        responses=[
+            ("", [ToolCall("edit_memory", {"note": "사용자는 답변을 짧게 받기를 원한다", "match_query": "말투"})]),
+            ("반영했어.", []),
+        ]
+    )
+    service = make_service(client)
+    sent = []
+
+    async def send(content):
+        sent.append(content)
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "내 말투 메모리 짧게 답하는 걸로 수정해줘.", is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+
+    user_memories = await LocalCore.llmUserMemoryDataSource.list_for_users("1", "2", ["user"])
+    assert sent[-1] == "반영했어."
+    assert [memory.content for memory in user_memories] == ["사용자는 답변을 짧게 받기를 원한다"]
+
+
+@pytest.mark.asyncio
 async def test_plain_chat_makes_no_tool_calls(tmp_path, monkeypatch):
     monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
     await LocalCore.init_tables()

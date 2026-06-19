@@ -4,7 +4,7 @@ from typing import Any, ClassVar
 from core.llm.models import LLMBufferedMessage
 
 SAVE_SCOPE_DESCRIPTION = (
-    "항상 해당 발화자 본인의 개인 메모리에만 적용한다. server가 전달되어도 서버 메모리는 수정하지 않는다."
+    "Use user scope for the speaking user's personal memory."
 )
 
 

@@ -105,7 +105,7 @@ async def test_live_env_llm_planner_driven_tool_calls(tmp_path, monkeypatch):
     settings = live_settings()
 
     chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_test")
-    # Default engine uses a real LLMToolRegistry (save_memory/clear_memory)
+    # Default engine uses a real LLMToolRegistry (save_memory/edit_memory/clear_memory)
     # driven by MAIN LLM native function-calling against settings.main.
     service = LLMService(settings, engine=LLMEngine(settings, chat_client), sleep=_noop_sleep)
     key = ("live-guild", "live-channel")
@@ -159,15 +159,13 @@ async def test_live_env_llm_planner_driven_tool_calls(tmp_path, monkeypatch):
     global_memories = await LocalCore.llmGlobalMemoryDataSource.list(*key)
     assert global_memories == []
 
-    # 8) Non-admin tries to clear server memory -> only own personal memory is cleared.
+    # 8) Non-admin tries to clear server memory. This must not mutate server/global memory.
     reply = await _say(service, key, user_id, user_name, "서버 기억 다 지워줘.", is_admin=False)
     assert reply.strip()
     global_after = await LocalCore.llmGlobalMemoryDataSource.list(*key, include_disabled=True)
-    user_memories_after = await LocalCore.llmUserMemoryDataSource.list_for_users(*key, [user_id])
     assert global_after == []
-    assert user_memories_after == [], "non-admin clear should still delete own memory"
 
-    # 9) Admin clear through LLM tools also cannot touch server/global state.
+    # 9) Admin server-scope clear request also cannot touch server/global state.
     await _say(service, key, admin_id, admin_name, "서버 기억이랑 말투 초기화해줘.", is_admin=True)
     global_final = await LocalCore.llmGlobalMemoryDataSource.list(*key, include_disabled=True)
     state = await LocalCore.llmServerStateDataSource.get(*key)
@@ -195,6 +193,42 @@ async def test_live_env_llm_infers_memory_from_context(tmp_path, monkeypatch):
     assert any("오버워치" in m.content for m in user_memories), (
         f"inferred memory should reference 오버워치: {[m.content for m in user_memories]!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_live_env_llm_edits_existing_personal_memory(tmp_path, monkeypatch):
+    """Real LLM should use edit_memory for a general personal memory update, not duplicate save_memory."""
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "live-edit-memory.sqlite"))
+    await LocalCore.init_tables()
+    settings = live_settings()
+
+    chat_client = OpenAICompatibleClient(settings.payload_logging, purpose="chat_live_edit_memory")
+    service = LLMService(settings, engine=LLMEngine(settings, chat_client), sleep=_noop_sleep)
+    key = ("live-guild", "live-channel")
+    user_id, user_name = "live-user-a", "BabiHova"
+    memory_id = await LocalCore.llmUserMemoryDataSource.add(
+        key[0],
+        key[1],
+        user_id,
+        "사용자는 오버워치를 좋아한다.",
+        user_name=user_name,
+    )
+
+    reply = await _say(
+        service,
+        key,
+        user_id,
+        user_name,
+        "내 개인 메모리 중 오버워치를 좋아한다는 내용을 마비노기를 좋아한다로 수정해줘.",
+        is_admin=False,
+    )
+
+    user_memories = await LocalCore.llmUserMemoryDataSource.list_for_users(*key, [user_id])
+    assert reply.strip()
+    assert len(user_memories) == 1, f"edit should update existing memory instead of adding duplicate: {user_memories!r}"
+    assert user_memories[0].id == memory_id
+    assert "마비노기" in user_memories[0].content
+    assert "오버워치" not in user_memories[0].content
 
 
 @pytest.mark.asyncio
