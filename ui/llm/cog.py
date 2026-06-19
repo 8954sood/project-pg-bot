@@ -14,6 +14,7 @@ from ui.llm.consent_view import LLMConsentView, consent_embed
 from ui.llm.typing_manager import LLMTypingManager
 
 logger = logging.getLogger(__name__)
+MAX_USER_INPUT_CHARS = 200
 
 
 class LLMCog(commands.Cog):
@@ -66,10 +67,24 @@ class LLMCog(commands.Cog):
                 view.message = consent_message
                 return
 
+            content = message.clean_content or message.content
+            content_length = len(content)
+            if content_length > MAX_USER_INPUT_CHARS:
+                failure = f"메시지는 최대 {MAX_USER_INPUT_CHARS}자까지 입력할 수 있습니다. 현재 {content_length}자입니다."
+                try:
+                    await message.reply(failure, mention_author=False)
+                except Exception:
+                    await message.channel.send(failure)
+                return
+
             await self.typing.start(guild_id, channel_id, message.channel)
 
             async def send_response(content: str) -> None:
-                await message.channel.send(content)
+                reply_text = content.strip() or "응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요."
+                try:
+                    await message.reply(reply_text, mention_author=False)
+                except Exception:
+                    await message.channel.send(reply_text)
 
             async def complete_message() -> None:
                 await self.typing.stop(guild_id, channel_id)
@@ -80,7 +95,7 @@ class LLMCog(commands.Cog):
                     channel_id=channel_id,
                     user_id=user_id,
                     author_name=message.author.display_name,
-                    content=message.clean_content or message.content,
+                    content=content,
                     is_admin=getattr(message.author.guild_permissions, "administrator", False),
                 ),
                 send_response=send_response,
@@ -210,36 +225,6 @@ class LLMCog(commands.Cog):
             for row in rows[:20]
         ]
         await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
-
-    @llm_memory.command(name="my-add", description="내 개인 메모리를 추가합니다.")
-    @app_commands.guild_only()
-    async def add_my_memory(self, interaction: discord.Interaction, content: str, key: Optional[str] = None) -> None:
-        if await self._reject_if_unavailable(interaction):
-            return
-        memory_id = await LocalCore.llmUserMemoryDataSource.add(
-            str(interaction.guild.id),
-            str(interaction.channel.id),
-            str(interaction.user.id),
-            content,
-            key=key,
-            user_name=getattr(interaction.user, "display_name", str(interaction.user.id)),
-        )
-        await interaction.response.send_message(f"개인 메모리를 추가했습니다. id=`{memory_id}`", ephemeral=True)
-
-    @llm_memory.command(name="my-edit", description="내 개인 메모리를 수정합니다.")
-    @app_commands.guild_only()
-    async def edit_my_memory(self, interaction: discord.Interaction, memory_id: int, content: str, key: Optional[str] = None) -> None:
-        if await self._reject_if_unavailable(interaction):
-            return
-        updated = await LocalCore.llmUserMemoryDataSource.update_user_memory(
-            memory_id,
-            str(interaction.guild.id),
-            str(interaction.channel.id),
-            str(interaction.user.id),
-            content=content,
-            key=key,
-        )
-        await interaction.response.send_message("수정했습니다." if updated else "대상 개인 메모리를 찾지 못했습니다.", ephemeral=True)
 
     @llm_memory.command(name="my-delete", description="내 개인 메모리를 삭제합니다.")
     @app_commands.guild_only()

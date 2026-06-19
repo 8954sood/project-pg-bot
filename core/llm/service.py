@@ -49,6 +49,7 @@ class LLMService:
         self.buffers: dict[tuple[str, str], list[LLMBufferedMessage]] = defaultdict(list)
         self.completions: dict[tuple[str, str], list[CompleteMessage]] = defaultdict(list)
         self.flush_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self.flushing: set[tuple[str, str]] = set()
         self.locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
         self.senders: dict[tuple[str, str], SendResponse] = {}
 
@@ -79,6 +80,8 @@ class LLMService:
     def _schedule_flush(self, key: tuple[str, str], send_response: SendResponse) -> None:
         task = self.flush_tasks.get(key)
         if task and not task.done():
+            if key in self.flushing or self.locks[key].locked():
+                return
             task.cancel()
         self.flush_tasks[key] = asyncio.create_task(self._debounced_flush(key, send_response))
 
@@ -97,8 +100,11 @@ class LLMService:
         async with self.locks[key]:
             if not self.buffers[key]:
                 return
+            self.flushing.add(key)
             current = list(self.buffers[key])
             self.buffers[key].clear()
+            current_completions = self.completions[key][: len(current)]
+            del self.completions[key][: len(current)]
             try:
                 conversation = BufferedConversation(
                     messages=[
@@ -121,13 +127,19 @@ class LLMService:
                     guild_id=guild_id,
                     channel_id=channel_id,
                 )
+                if not response_text.strip():
+                    response_text = "응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요."
                 await send_response(response_text)
                 await self._record_recent(guild_id, channel_id, current, response_text)
             except Exception:
                 logger.exception("LLM response generation failed", extra={"guild_id": guild_id, "channel_id": channel_id})
                 await send_response("LLM 응답을 생성하는 중 오류가 발생했습니다.")
             finally:
-                await self._complete_pending(key)
+                self.flushing.discard(key)
+                await self._complete_callbacks(key, current_completions)
+                if self.buffers[key]:
+                    next_sender = self.senders.get(key, send_response)
+                    self.flush_tasks[key] = asyncio.create_task(self._debounced_flush(key, next_sender))
 
     async def _load_memory_state(self, guild_id: str, channel_id: str, user_ids: set[str]) -> MemoryState:
         server_state = await LLMServerStateDataSource.get(guild_id, channel_id)
@@ -201,6 +213,9 @@ class LLMService:
 
     async def _complete_pending(self, key: tuple[str, str]) -> None:
         completions = self.completions.pop(key, [])
+        await self._complete_callbacks(key, completions)
+
+    async def _complete_callbacks(self, key: tuple[str, str], completions: list[CompleteMessage]) -> None:
         for complete in completions:
             try:
                 await complete()
