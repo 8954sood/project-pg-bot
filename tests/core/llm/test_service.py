@@ -6,7 +6,7 @@ from core.llm.config import LLMSettings, LLMProviderConfig
 from core.llm.engine import LLMEngine
 from core.llm.llm_client import LLMClientResponse
 from core.llm.models import LLMInputMessage, ToolCall
-from core.llm.service import LLMService, MAX_USER_INPUT_CHARS
+from core.llm.service import LLMService
 from core.llm.tools import LLMTool, LLMToolRegistry, ToolContext
 from core.local import LocalCore
 from core.local import path as path_module
@@ -352,64 +352,6 @@ async def test_save_style_tool_is_not_registered(tmp_path, monkeypatch):
     user_memories = await LocalCore.llmUserMemoryDataSource.list_for_users("1", "2", ["user"])
     assert server_state.active_style_directive == ""
     assert user_memories == []
-
-
-@pytest.mark.asyncio
-async def test_message_over_200_chars_is_rejected_before_llm(tmp_path, monkeypatch):
-    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
-    await LocalCore.init_tables()
-    client = FakeClient()
-    service = make_service(client)
-    sent = []
-    completed = 0
-    content = "가" * (MAX_USER_INPUT_CHARS + 1)
-
-    async def send(message):
-        sent.append(message)
-
-    async def complete():
-        nonlocal completed
-        completed += 1
-
-    result = await service.enqueue_message(
-        LLMInputMessage("1", "2", "user", "User", content, is_admin=False),
-        send_response=send,
-        complete_message=complete,
-    )
-
-    key = ("1", "2")
-    assert result.ok is False
-    assert result.message == (
-        f"메시지는 최대 {MAX_USER_INPUT_CHARS}자까지 입력할 수 있습니다. "
-        f"현재 {MAX_USER_INPUT_CHARS + 1}자입니다."
-    )
-    assert sent == [result.message]
-    assert completed == 1
-    assert client.calls == 0
-    assert service.buffers[key] == []
-    assert key not in service.flush_tasks
-
-
-@pytest.mark.asyncio
-async def test_message_at_200_chars_is_allowed(tmp_path, monkeypatch):
-    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
-    await LocalCore.init_tables()
-    client = FakeClient()
-    service = make_service(client)
-    sent = []
-
-    async def send(message):
-        sent.append(message)
-
-    await enqueue_and_flush(
-        service,
-        LLMInputMessage("1", "2", "user", "User", "가" * MAX_USER_INPUT_CHARS, is_admin=False),
-        send=send,
-        complete=_noop_complete,
-    )
-
-    assert client.calls == 1
-    assert sent == ["응답"]
 
 
 @pytest.mark.asyncio

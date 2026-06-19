@@ -14,6 +14,7 @@ from ui.llm.consent_view import LLMConsentView, consent_embed
 from ui.llm.typing_manager import LLMTypingManager
 
 logger = logging.getLogger(__name__)
+MAX_USER_INPUT_CHARS = 200
 
 
 class LLMCog(commands.Cog):
@@ -66,6 +67,16 @@ class LLMCog(commands.Cog):
                 view.message = consent_message
                 return
 
+            content = message.clean_content or message.content
+            content_length = len(content)
+            if content_length > MAX_USER_INPUT_CHARS:
+                failure = f"메시지는 최대 {MAX_USER_INPUT_CHARS}자까지 입력할 수 있습니다. 현재 {content_length}자입니다."
+                try:
+                    await message.reply(failure, mention_author=False)
+                except Exception:
+                    await message.channel.send(failure)
+                return
+
             await self.typing.start(guild_id, channel_id, message.channel)
 
             async def send_response(content: str) -> None:
@@ -84,7 +95,7 @@ class LLMCog(commands.Cog):
                     channel_id=channel_id,
                     user_id=user_id,
                     author_name=message.author.display_name,
-                    content=message.clean_content or message.content,
+                    content=content,
                     is_admin=getattr(message.author.guild_permissions, "administrator", False),
                 ),
                 send_response=send_response,

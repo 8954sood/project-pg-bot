@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 SendResponse = Callable[[str], Awaitable[None]]
 CompleteMessage = Callable[[], Awaitable[None]]
-MAX_USER_INPUT_CHARS = 200
 
 
 class LLMService:
@@ -62,12 +61,6 @@ class LLMService:
         complete_message: CompleteMessage,
     ) -> LLMResponseResult:
         key = (message.guild_id, message.channel_id)
-        message_length = len(message.content)
-        if message_length > MAX_USER_INPUT_CHARS:
-            failure = f"메시지는 최대 {MAX_USER_INPUT_CHARS}자까지 입력할 수 있습니다. 현재 {message_length}자입니다."
-            await send_response(failure)
-            await self._complete_callbacks(key, [complete_message])
-            return LLMResponseResult(False, failure)
         self.buffers[key].append(
             LLMBufferedMessage(
                 guild_id=message.guild_id,

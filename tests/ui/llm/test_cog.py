@@ -5,7 +5,7 @@ import pytest
 
 from core.llm.config import LLMSettings
 from core.local import LocalCore
-from ui.llm.cog import LLMCog
+from ui.llm.cog import LLMCog, MAX_USER_INPUT_CHARS
 from ui.llm.consent_view import LLMConsentView
 
 
@@ -64,7 +64,7 @@ class FakeMessage(SimpleNamespace):
         return FakeSentMessage()
 
 
-def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None, fail_reply=False):
+def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None, fail_reply=False, content="hello"):
     channel = channel or FakeChannel()
     return FakeMessage(
         fail_reply=fail_reply,
@@ -78,8 +78,8 @@ def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None,
             guild_permissions=SimpleNamespace(administrator=False),
         ),
         webhook_id=webhook_id,
-        clean_content="hello",
-        content="hello",
+        clean_content=content,
+        content=content,
     )
 
 
@@ -169,6 +169,42 @@ async def test_consented_message_is_queued(monkeypatch):
 
     assert channel.typing_calls == 1
     cog.service.enqueue_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_long_consented_message_is_rejected_before_typing_and_queue(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel, content="가" * (MAX_USER_INPUT_CHARS + 1))
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+
+    assert channel.typing_calls == 0
+    assert message.replies == [
+        (
+            (f"메시지는 최대 {MAX_USER_INPUT_CHARS}자까지 입력할 수 있습니다. 현재 {MAX_USER_INPUT_CHARS + 1}자입니다.",),
+            {"mention_author": False},
+        )
+    ]
+    cog.service.enqueue_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_200_char_consented_message_is_queued(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel, content="가" * MAX_USER_INPUT_CHARS)
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+
+    assert channel.typing_calls == 1
+    cog.service.enqueue_message.assert_awaited_once()
+    queued_message = cog.service.enqueue_message.await_args.args[0]
+    assert queued_message.content == "가" * MAX_USER_INPUT_CHARS
 
 
 @pytest.mark.asyncio
