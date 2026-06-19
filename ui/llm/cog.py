@@ -226,36 +226,6 @@ class LLMCog(commands.Cog):
         ]
         await interaction.response.send_message("\n".join(lines)[:1900], ephemeral=True)
 
-    @llm_memory.command(name="my-add", description="내 개인 메모리를 추가합니다.")
-    @app_commands.guild_only()
-    async def add_my_memory(self, interaction: discord.Interaction, content: str, key: Optional[str] = None) -> None:
-        if await self._reject_if_unavailable(interaction):
-            return
-        memory_id = await LocalCore.llmUserMemoryDataSource.add(
-            str(interaction.guild.id),
-            str(interaction.channel.id),
-            str(interaction.user.id),
-            content,
-            key=key,
-            user_name=getattr(interaction.user, "display_name", str(interaction.user.id)),
-        )
-        await interaction.response.send_message(f"개인 메모리를 추가했습니다. id=`{memory_id}`", ephemeral=True)
-
-    @llm_memory.command(name="my-edit", description="내 개인 메모리를 수정합니다.")
-    @app_commands.guild_only()
-    async def edit_my_memory(self, interaction: discord.Interaction, memory_id: int, content: str, key: Optional[str] = None) -> None:
-        if await self._reject_if_unavailable(interaction):
-            return
-        updated = await LocalCore.llmUserMemoryDataSource.update_user_memory(
-            memory_id,
-            str(interaction.guild.id),
-            str(interaction.channel.id),
-            str(interaction.user.id),
-            content=content,
-            key=key,
-        )
-        await interaction.response.send_message("수정했습니다." if updated else "대상 개인 메모리를 찾지 못했습니다.", ephemeral=True)
-
     @llm_memory.command(name="my-delete", description="내 개인 메모리를 삭제합니다.")
     @app_commands.guild_only()
     async def delete_my_memory(self, interaction: discord.Interaction, memory_id: int) -> None:

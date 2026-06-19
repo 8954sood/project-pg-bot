@@ -240,12 +240,10 @@ async def test_send_response_falls_back_to_channel_send_when_reply_fails(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_my_memory_commands_use_actor_identity(monkeypatch):
+async def test_my_memory_list_and_delete_commands_use_actor_identity(monkeypatch):
     cog = make_cog()
     data_source = SimpleNamespace(
         list_user=AsyncMock(return_value=[]),
-        add=AsyncMock(return_value=10),
-        update_user_memory=AsyncMock(return_value=True),
         delete_user_memory=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(LocalCore, "llmUserMemoryDataSource", data_source)
@@ -254,11 +252,12 @@ async def test_my_memory_commands_use_actor_identity(monkeypatch):
     await cog.list_my_memory.callback(cog, interaction)
     data_source.list_user.assert_awaited_once_with("1", "2", "42", include_disabled=True)
 
-    await cog.add_my_memory.callback(cog, interaction, "내 메모리", key="k")
-    data_source.add.assert_awaited_once_with("1", "2", "42", "내 메모리", key="k", user_name="User")
-
-    await cog.edit_my_memory.callback(cog, interaction, 10, "수정", key=None)
-    data_source.update_user_memory.assert_awaited_once_with(10, "1", "2", "42", content="수정", key=None)
-
     await cog.delete_my_memory.callback(cog, interaction, 10)
     data_source.delete_user_memory.assert_awaited_once_with(10, "1", "2", "42")
+
+
+def test_my_memory_add_and_edit_commands_are_not_registered():
+    command_names = {command.name for command in LLMCog.llm_memory.commands}
+
+    assert "my-add" not in command_names
+    assert "my-edit" not in command_names
