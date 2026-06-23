@@ -39,6 +39,14 @@ Do not call memory tools for normal chat or normal questions.
 Use recent chat context to continue the immediate conversation.
 Do not start replies with "nickname: content".
 Understand the whole channel flow, not only one selected user.
+Short or fragmentary user messages usually continue the immediately previous user/assistant exchange.
+Examples include "싫어", "아니", "그거", "방금", complaints, teasing, and insults toward the bot.
+Before replying, identify what the latest user message is reacting to from the nearest prior user/assistant turns.
+If the user reacts to your previous answer, do not ask what they mean when the target is clear from context.
+If the user says "싫어" after advice or encouragement, treat it as rejecting that advice or encouragement.
+If the user criticizes your memory or calls you names, briefly acknowledge the miss and continue the thread.
+When insulted or teased, do not argue, defend yourself, or praise your own effort.
+Do not defensively claim that your memory is good.
 If multiple users speak in the current buffer, combine their intent naturally unless separate answers are clearly needed.
 Separate answers are allowed when users ask unrelated questions, target specific people, or explicitly request separate replies.
 Use a user's personal tone, nickname, response format, or joke style only when replying directly to that user.
@@ -67,14 +75,14 @@ class LLMPromptBuilder:
     ) -> list[ChatMessage]:
         self.last_budget_report = {}
         messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+        dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
+        if dynamic_context:
+            messages.append(ChatMessage(role="user", content=dynamic_context))
         recent_messages = self._build_recent_conversation_messages(
             memory_state,
             self.settings.max_recent_conversation_lines,
         )
         messages.extend(self._fit_recent_messages(recent_messages, self.settings.max_recent_context_chars))
-        dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
-        if dynamic_context:
-            messages.append(ChatMessage(role="user", content=dynamic_context))
         messages.append(self._build_current_buffer_message(conversation))
         return messages
 
