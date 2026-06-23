@@ -82,7 +82,7 @@ class OpenAICompatibleClient:
         if url.endswith("/api/chat"):
             payload = {
                 "model": config.model,
-                "messages": messages,
+                "messages": [self._to_ollama_chat_message(message) for message in messages],
                 "stream": False,
                 "options": {"temperature": config.temperature, "num_predict": config.max_tokens},
             }
@@ -164,7 +164,7 @@ class OpenAICompatibleClient:
         return calls
 
     def _log_request(self, config: LLMProviderConfig, messages: list[dict[str, Any]]) -> None:
-        approx = sum(len(message.get("content", "")) for message in messages)
+        approx = sum(self._content_length(message.get("content", "")) for message in messages)
         extra: dict[str, object] = {
             "model": config.model,
             "purpose": self.purpose,
@@ -178,6 +178,7 @@ class OpenAICompatibleClient:
         logger.info("LLM request prepared", extra=extra)
 
     def _write_jsonl_request(self, url: str, payload: dict[str, Any], tool_choice: str) -> None:
+        redacted_payload = self._redact_images(payload)
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "purpose": self.purpose,
@@ -186,7 +187,7 @@ class OpenAICompatibleClient:
             "message_count": len(payload.get("messages", [])),
             "tool_choice": tool_choice if payload.get("tools") else None,
             "tools": payload.get("tools", []),
-            "payload": payload,
+            "payload": redacted_payload,
         }
         try:
             REQUEST_JSONL_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -194,3 +195,80 @@ class OpenAICompatibleClient:
                 fp.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception:
             logger.exception("Failed to write LLM request JSONL", extra={"purpose": self.purpose})
+
+    @classmethod
+    def _to_ollama_chat_message(cls, message: dict[str, Any]) -> dict[str, Any]:
+        content = message.get("content", "")
+        if not isinstance(content, list):
+            return dict(message)
+
+        converted = dict(message)
+        text_parts: list[str] = []
+        images: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                text_parts.append(str(part.get("text", "")))
+            elif part.get("type") == "image_url":
+                image_base64 = cls._extract_image_base64(part.get("image_url"))
+                if image_base64:
+                    images.append(image_base64)
+        converted["content"] = "\n".join(text for text in text_parts if text)
+        if images:
+            converted["images"] = images
+        return converted
+
+    @staticmethod
+    def _extract_image_base64(image_url: object) -> str:
+        if isinstance(image_url, dict):
+            url = str(image_url.get("url", ""))
+        else:
+            url = str(image_url or "")
+        if url.startswith("data:") and "," in url:
+            return url.split(",", 1)[1]
+        return url
+
+    @classmethod
+    def _redact_images(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            if value.get("type") == "image_url":
+                return {"type": "image_url", "image_url": cls._redacted_image_url(value.get("image_url"))}
+            return {
+                key: [f"<redacted image: base64_chars={len(str(image))}>" for image in item]
+                if key == "images" and isinstance(item, list)
+                else cls._redact_images(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls._redact_images(item) for item in value]
+        return value
+
+    @classmethod
+    def _redacted_image_url(cls, image_url: object) -> object:
+        if isinstance(image_url, dict):
+            url = str(image_url.get("url", ""))
+            return {"url": cls._redacted_image_value(url)}
+        return cls._redacted_image_value(str(image_url or ""))
+
+    @staticmethod
+    def _redacted_image_value(value: str) -> str:
+        if value.startswith("data:image/"):
+            media_type = value.split(";", 1)[0].removeprefix("data:")
+            data = value.split(",", 1)[1] if "," in value else ""
+            return f"<redacted image: media_type={media_type}, base64_chars={len(data)}>"
+        return "<redacted image>"
+
+    @staticmethod
+    def _content_length(content: object) -> int:
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total += len(str(part.get("text", "")))
+                elif isinstance(part, dict) and part.get("type") == "image_url":
+                    total += len("[image]")
+            return total
+        return len(str(content))

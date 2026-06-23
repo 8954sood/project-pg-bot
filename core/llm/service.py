@@ -69,6 +69,7 @@ class LLMService:
                 author_name=message.author_name,
                 content=message.content,
                 is_admin=message.is_admin,
+                images=list(message.images),
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
         )
@@ -111,8 +112,9 @@ class LLMService:
                         Message(
                             author_id=message.user_id,
                             author_name=message.author_name,
-                            content=message.content,
+                            content=message.content or self._image_placeholder(message),
                             timestamp=datetime.fromisoformat(message.created_at),
+                            images=list(message.images),
                         )
                         for message in current
                     ],
@@ -186,7 +188,7 @@ class LLMService:
                 message.user_id,
                 message.author_name,
                 "user",
-                message.content,
+                message.content or self._image_placeholder(message),
             )
         await LLMRecentMessageDataSource.add(guild_id, channel_id, None, "assistant", "assistant", response_text)
         await LLMRecentMessageDataSource.prune(guild_id, channel_id, self.settings.max_recent_logs)
@@ -210,6 +212,10 @@ class LLMService:
                 seen.add(item)
                 result.append(item)
         return result[-limit:]
+
+    @staticmethod
+    def _image_placeholder(message: LLMBufferedMessage) -> str:
+        return f"[이미지 첨부 {len(message.images)}장]" if message.images else ""
 
     async def _complete_pending(self, key: tuple[str, str]) -> None:
         completions = self.completions.pop(key, [])

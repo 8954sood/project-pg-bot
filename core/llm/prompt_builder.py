@@ -105,6 +105,10 @@ class LLMPromptBuilder:
             max(0, self.settings.max_current_buffer_chars - len(header)),
             keep_tail=True,
         )
+        if conversation.images:
+            content: list[dict[str, object]] = [{"type": "text", "text": current_buffer}]
+            content.extend(image.to_openai_content_part() for image in conversation.images)
+            return ChatMessage(role="user", content=content)
         return ChatMessage(role="user", content=current_buffer)
 
     @staticmethod

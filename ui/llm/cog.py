@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.llm.config import LLMSettings, load_llm_settings
+from core.llm.images import MAX_LLM_IMAGES, LLMImageInput, is_supported_image, prepare_llm_image
 from core.llm.models import LLMInputMessage
 from core.llm.service import LLMService
 from core.local import LocalCore
@@ -77,6 +78,13 @@ class LLMCog(commands.Cog):
                     await message.channel.send(failure)
                 return
 
+            images, image_error = await self._collect_images(message)
+            if image_error:
+                try:
+                    await message.reply(image_error, mention_author=False)
+                except Exception:
+                    await message.channel.send(image_error)
+                return
             await self.typing.start(guild_id, channel_id, message.channel)
 
             async def send_response(content: str) -> None:
@@ -97,6 +105,7 @@ class LLMCog(commands.Cog):
                     author_name=message.author.display_name,
                     content=content,
                     is_admin=getattr(message.author.guild_permissions, "administrator", False),
+                    images=images,
                 ),
                 send_response=send_response,
                 complete_message=complete_message,
@@ -104,6 +113,28 @@ class LLMCog(commands.Cog):
         except Exception:
             logger.exception("LLM message handling failed", extra={"guild_id": guild_id, "channel_id": channel_id})
             await self.typing.stop(guild_id, channel_id)
+
+    async def _collect_images(self, message: discord.Message) -> tuple[list[LLMImageInput], str | None]:
+        images: list[LLMImageInput] = []
+        for attachment in message.attachments:
+            if len(images) >= MAX_LLM_IMAGES:
+                break
+            filename = attachment.filename or ""
+            content_type = attachment.content_type
+            if not is_supported_image(filename, content_type):
+                continue
+            try:
+                prepared = prepare_llm_image(filename, content_type, await attachment.read())
+            except Exception:
+                logger.exception(
+                    "LLM image attachment processing failed",
+                    extra={"attachment_filename": filename, "attachment_content_type": content_type},
+                )
+                display_name = filename or "이미지"
+                return images, f"{display_name} 이미지를 불러오지 못했습니다. 잠시 후 다시 업로드해서 시도해 주세요."
+            if prepared is not None:
+                images.append(prepared)
+        return images, None
 
     def _guild_enabled(self, interaction: discord.Interaction) -> bool:
         return interaction.guild is not None and str(interaction.guild.id) in self.settings.guild_channel_map

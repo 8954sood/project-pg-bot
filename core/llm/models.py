@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from core.llm.images import LLMImageInput
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -14,6 +16,15 @@ class Message:
     author_name: str
     content: str
     timestamp: datetime = field(default_factory=utc_now)
+    images: list[LLMImageInput] = field(default_factory=list)
+
+    @property
+    def display_content(self) -> str:
+        if self.content:
+            return self.content
+        if self.images:
+            return f"[이미지 첨부 {len(self.images)}장]"
+        return ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,7 +57,11 @@ class BufferedConversation:
 
     @property
     def text(self) -> str:
-        return "\n".join(f"{message.author_name}: {message.content}" for message in self.messages)
+        return "\n".join(f"{message.author_name}: {message.display_content}" for message in self.messages)
+
+    @property
+    def images(self) -> list[LLMImageInput]:
+        return [image for message in self.messages for image in message.images]
 
 
 @dataclass(slots=True)
@@ -102,9 +117,9 @@ class RecentLogEntry:
 @dataclass(slots=True)
 class ChatMessage:
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str | list[dict[str, Any]]
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {"role": self.role, "content": self.content}
 
 
@@ -152,6 +167,7 @@ class LLMInputMessage:
     author_name: str
     content: str
     is_admin: bool = field(default=False, kw_only=True)
+    images: list[LLMImageInput] = field(default_factory=list, kw_only=True)
 
 
 @dataclass(slots=True)
@@ -164,4 +180,3 @@ class LLMResponseResult:
     ok: bool
     message: str
     response_text: str = ""
-

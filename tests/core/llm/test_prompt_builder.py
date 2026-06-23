@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from core.llm.config import LLMSettings
+from core.llm.images import LLMImageInput
 from core.llm.models import BufferedConversation, MemoryState, Message, RecentLogEntry
 from core.llm.prompt_builder import LLMPromptBuilder
 from core.llm.prompt_builder import SYSTEM_PROMPT
@@ -52,6 +53,30 @@ def test_prompt_builder_allows_zero_recent_conversation_lines():
 
     assert "User1: old" not in contents
     assert "latest" not in contents
+
+
+def test_prompt_builder_adds_current_buffer_images_as_multimodal_content():
+    builder = LLMPromptBuilder(LLMSettings())
+    image = LLMImageInput(
+        media_type="image/png",
+        data_base64="abc123",
+        original_bytes=10,
+        processed_bytes=10,
+        filename="test.png",
+    )
+    conversation = BufferedConversation(
+        messages=[Message(author_id="u2", author_name="User2", content="", images=[image])],
+        started_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+    )
+
+    messages = builder.build_messages(conversation=conversation, memory_state=MemoryState())
+    current = messages[-1].content
+
+    assert isinstance(current, list)
+    assert current[0]["type"] == "text"
+    assert "[이미지 첨부 1장]" in current[0]["text"]
+    assert current[1]["image_url"]["url"] == "data:image/png;base64,abc123"
 
 
 def test_system_prompt_contains_memory_ownership_and_non_transfer_rules():

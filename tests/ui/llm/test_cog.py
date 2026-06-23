@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -64,7 +65,31 @@ class FakeMessage(SimpleNamespace):
         return FakeSentMessage()
 
 
-def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None, fail_reply=False, content="hello"):
+class FakeAttachment:
+    def __init__(self, *, filename="image.png", content_type="image/png", data=b"image-data", read_error=None):
+        self.filename = filename
+        self.content_type = content_type
+        self.data = data
+        self.read_error = read_error
+        self.read_calls = 0
+
+    async def read(self):
+        self.read_calls += 1
+        if self.read_error is not None:
+            raise self.read_error
+        return self.data
+
+
+def make_message(
+    *,
+    guild_id=1,
+    channel=None,
+    author_bot=False,
+    webhook_id=None,
+    fail_reply=False,
+    content="hello",
+    attachments=None,
+):
     channel = channel or FakeChannel()
     return FakeMessage(
         fail_reply=fail_reply,
@@ -80,6 +105,7 @@ def make_message(*, guild_id=1, channel=None, author_bot=False, webhook_id=None,
         webhook_id=webhook_id,
         clean_content=content,
         content=content,
+        attachments=attachments or [],
     )
 
 
@@ -205,6 +231,65 @@ async def test_200_char_consented_message_is_queued(monkeypatch):
     cog.service.enqueue_message.assert_awaited_once()
     queued_message = cog.service.enqueue_message.await_args.args[0]
     assert queued_message.content == "가" * MAX_USER_INPUT_CHARS
+
+
+@pytest.mark.asyncio
+async def test_image_only_consented_message_is_queued_with_images(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    attachment = FakeAttachment()
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(make_message(channel=channel, content="", attachments=[attachment]))
+
+    queued_message = cog.service.enqueue_message.await_args.args[0]
+    assert queued_message.content == ""
+    assert len(queued_message.images) == 1
+    assert queued_message.images[0].media_type == "image/png"
+    assert attachment.read_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_consented_message_uses_at_most_three_supported_images(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    attachments = [
+        FakeAttachment(filename=f"{index}.png", content_type="image/png", data=b"image")
+        for index in range(4)
+    ]
+    attachments.append(FakeAttachment(filename="note.txt", content_type="text/plain", data=b"text"))
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(make_message(channel=channel, attachments=attachments))
+
+    queued_message = cog.service.enqueue_message.await_args.args[0]
+    assert len(queued_message.images) == 3
+    assert [attachment.read_calls for attachment in attachments] == [1, 1, 1, 0, 0]
+
+
+@pytest.mark.asyncio
+async def test_image_read_failure_replies_and_does_not_queue(monkeypatch, caplog):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    attachment = FakeAttachment(filename="failed.png", read_error=RuntimeError("cdn unavailable"))
+    message = make_message(channel=channel, attachments=[attachment])
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    with caplog.at_level(logging.ERROR):
+        await cog.on_message(message)
+
+    assert channel.typing_calls == 0
+    assert cog.service.enqueue_message.await_count == 0
+    assert message.replies == [
+        (
+            ("failed.png 이미지를 불러오지 못했습니다. 잠시 후 다시 업로드해서 시도해 주세요.",),
+            {"mention_author": False},
+        )
+    ]
+    assert "LLM image attachment processing failed" in caplog.text
 
 
 @pytest.mark.asyncio
