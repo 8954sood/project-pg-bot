@@ -1,5 +1,6 @@
 aiosqlite==0.22.1
 discord.py[voice]==2.7.1
 gTTS==2.5.4
+Pillow==12.2.0
 python-dotenv==1.2.1
 websockets==15.0.1

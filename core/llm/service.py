@@ -1,12 +1,15 @@
 import asyncio
 import json
 import logging
+import tempfile
 from collections import defaultdict
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from core.llm.config import LLMSettings
 from core.llm.engine import LLMEngine
+from core.llm.images import CachedLLMImage, LLMImageInput
 from core.llm.models import (
     BufferedConversation,
     LLMBufferedMessage,
@@ -41,6 +44,7 @@ class LLMService:
         engine: LLMEngine | None = None,
         tools: LLMToolRegistry | None = None,
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+        image_cache_dir: Path | None = None,
     ):
         self.settings = settings
         self.tools = tools or LLMToolRegistry()
@@ -52,6 +56,8 @@ class LLMService:
         self.flushing: set[tuple[str, str]] = set()
         self.locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
         self.senders: dict[tuple[str, str], SendResponse] = {}
+        self.image_cache_dir = image_cache_dir or Path(tempfile.gettempdir()) / "project-pg-bot" / "llm-images"
+        self.image_cache: dict[tuple[str, str], dict[int, list[CachedLLMImage]]] = defaultdict(dict)
 
     async def enqueue_message(
         self,
@@ -69,6 +75,7 @@ class LLMService:
                 author_name=message.author_name,
                 content=message.content,
                 is_admin=message.is_admin,
+                images=list(message.images),
                 created_at=datetime.now(timezone.utc).isoformat(),
             )
         )
@@ -111,8 +118,9 @@ class LLMService:
                         Message(
                             author_id=message.user_id,
                             author_name=message.author_name,
-                            content=message.content,
+                            content=message.content or self._image_placeholder(message),
                             timestamp=datetime.fromisoformat(message.created_at),
+                            images=list(message.images),
                         )
                         for message in current
                     ],
@@ -158,8 +166,10 @@ class LLMService:
                 RecentLogEntry(
                     role=row.role,
                     content=row.content,
+                    id=row.id,
                     author_id=row.user_id,
                     author_name=row.author_name,
+                    images=self._cached_images_for_row((guild_id, channel_id), row.id),
                     timestamp=datetime.fromisoformat(row.created_at),
                 )
                 for row in recent_messages
@@ -180,16 +190,19 @@ class LLMService:
         response_text: str,
     ) -> None:
         for message in messages:
-            await LLMRecentMessageDataSource.add(
+            recent_id = await LLMRecentMessageDataSource.add(
                 guild_id,
                 channel_id,
                 message.user_id,
                 message.author_name,
                 "user",
-                message.content,
+                message.content or self._image_placeholder(message),
             )
+            if message.images:
+                self._cache_recent_images((guild_id, channel_id), recent_id, message.images)
         await LLMRecentMessageDataSource.add(guild_id, channel_id, None, "assistant", "assistant", response_text)
         await LLMRecentMessageDataSource.prune(guild_id, channel_id, self.settings.max_recent_logs)
+        await self._prune_image_cache(guild_id, channel_id)
 
     @staticmethod
     def _json_list(value: str | None) -> list[str]:
@@ -210,6 +223,83 @@ class LLMService:
                 seen.add(item)
                 result.append(item)
         return result[-limit:]
+
+    @staticmethod
+    def _image_placeholder(message: LLMBufferedMessage) -> str:
+        return f"[이미지 첨부 {len(message.images)}장]" if message.images else ""
+
+    def _cache_recent_images(self, key: tuple[str, str], recent_id: int, images: list[LLMImageInput]) -> None:
+        cached: list[CachedLLMImage] = []
+        self.image_cache_dir.mkdir(parents=True, exist_ok=True)
+        for index, image in enumerate(images):
+            suffix = self._image_suffix(image.media_type)
+            file_path = self.image_cache_dir / f"{key[0]}_{key[1]}_{recent_id}_{index}{suffix}"
+            try:
+                data = image.raw_bytes()
+                file_path.write_bytes(data)
+            except Exception:
+                logger.exception(
+                    "Failed to cache LLM recent image",
+                    extra={"guild_id": key[0], "channel_id": key[1], "recent_id": recent_id, "image_index": index},
+                )
+                continue
+            cached.append(
+                CachedLLMImage(
+                    media_type=image.media_type,
+                    file_path=file_path,
+                    original_bytes=image.original_bytes,
+                    processed_bytes=len(data),
+                    filename=image.filename,
+                )
+            )
+        if cached:
+            self.image_cache[key][recent_id] = cached
+
+    def _cached_images_for_row(self, key: tuple[str, str], recent_id: int) -> list[LLMImageInput]:
+        result: list[LLMImageInput] = []
+        for cached in self.image_cache.get(key, {}).get(recent_id, []):
+            image = cached.to_input()
+            if image is not None:
+                result.append(image)
+        return result
+
+    async def _prune_image_cache(self, guild_id: str, channel_id: str) -> None:
+        key = (guild_id, channel_id)
+        cached = self.image_cache.get(key)
+        if not cached:
+            return
+        recent_messages = await LLMRecentMessageDataSource.list_recent(guild_id, channel_id, self.settings.max_recent_logs)
+        if self.settings.max_recent_conversation_lines <= 0:
+            keep_ids: set[int] = set()
+        else:
+            keep_ids = {
+                row.id
+                for row in recent_messages[-self.settings.max_recent_conversation_lines :]
+                if row.role == "user"
+            }
+        for recent_id in list(cached):
+            if recent_id not in keep_ids:
+                self._delete_cached_images(cached.pop(recent_id))
+        if not cached:
+            self.image_cache.pop(key, None)
+
+    @staticmethod
+    def _delete_cached_images(images: list[CachedLLMImage]) -> None:
+        for image in images:
+            try:
+                image.file_path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Failed to delete LLM cached image", extra={"image_path": str(image.file_path)})
+
+    @staticmethod
+    def _image_suffix(media_type: str) -> str:
+        if media_type == "image/png":
+            return ".png"
+        if media_type == "image/webp":
+            return ".webp"
+        if media_type == "image/gif":
+            return ".gif"
+        return ".jpg"
 
     async def _complete_pending(self, key: tuple[str, str]) -> None:
         completions = self.completions.pop(key, [])

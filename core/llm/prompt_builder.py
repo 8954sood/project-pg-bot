@@ -39,6 +39,14 @@ Do not call memory tools for normal chat or normal questions.
 Use recent chat context to continue the immediate conversation.
 Do not start replies with "nickname: content".
 Understand the whole channel flow, not only one selected user.
+Short or fragmentary user messages usually continue the immediately previous user/assistant exchange.
+Examples include "싫어", "아니", "그거", "방금", complaints, teasing, and insults toward the bot.
+Before replying, identify what the latest user message is reacting to from the nearest prior user/assistant turns.
+If the user reacts to your previous answer, do not ask what they mean when the target is clear from context.
+If the user says "싫어" after advice or encouragement, treat it as rejecting that advice or encouragement.
+If the user criticizes your memory or calls you names, briefly acknowledge the miss and continue the thread.
+When insulted or teased, do not argue, defend yourself, or praise your own effort.
+Do not defensively claim that your memory is good.
 If multiple users speak in the current buffer, combine their intent naturally unless separate answers are clearly needed.
 Separate answers are allowed when users ask unrelated questions, target specific people, or explicitly request separate replies.
 Use a user's personal tone, nickname, response format, or joke style only when replying directly to that user.
@@ -67,14 +75,14 @@ class LLMPromptBuilder:
     ) -> list[ChatMessage]:
         self.last_budget_report = {}
         messages = [ChatMessage(role="system", content=SYSTEM_PROMPT)]
+        dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
+        if dynamic_context:
+            messages.append(ChatMessage(role="user", content=dynamic_context))
         recent_messages = self._build_recent_conversation_messages(
             memory_state,
             self.settings.max_recent_conversation_lines,
         )
         messages.extend(self._fit_recent_messages(recent_messages, self.settings.max_recent_context_chars))
-        dynamic_context = self._build_dynamic_context_block(memory_state, conversation.participants)
-        if dynamic_context:
-            messages.append(ChatMessage(role="user", content=dynamic_context))
         messages.append(self._build_current_buffer_message(conversation))
         return messages
 
@@ -105,6 +113,8 @@ class LLMPromptBuilder:
             max(0, self.settings.max_current_buffer_chars - len(header)),
             keep_tail=True,
         )
+        if conversation.images:
+            return ChatMessage(role="user", content=self._multimodal_content(current_buffer, conversation.images))
         return ChatMessage(role="user", content=current_buffer)
 
     @staticmethod
@@ -122,7 +132,11 @@ class LLMPromptBuilder:
                 messages.append(ChatMessage(role="assistant", content=entry.content))
             else:
                 author = entry.author_name or entry.author_id or "user"
-                messages.append(ChatMessage(role="user", content=f"{author}: {entry.content}"))
+                content = f"{author}: {entry.content}"
+                if entry.images:
+                    messages.append(ChatMessage(role="user", content=LLMPromptBuilder._multimodal_content(content, entry.images)))
+                else:
+                    messages.append(ChatMessage(role="user", content=content))
         return messages
 
     @staticmethod
@@ -139,19 +153,19 @@ class LLMPromptBuilder:
         total = 0
         excluded = 0
         for message in reversed(messages):
-            size = len(message.content)
+            size = self._message_size(message)
             if selected and total + size > max_chars:
                 excluded += 1
                 continue
             if not selected and size > max_chars:
-                selected.append(ChatMessage(role=message.role, content=self._clip_text(message.content, max_chars, keep_tail=True)))
+                selected.append(self._clip_message(message, max_chars))
                 total = max_chars
                 continue
             selected.append(message)
             total += size
         selected.reverse()
-        self.last_budget_report["recent_original_chars"] = sum(len(message.content) for message in messages)
-        self.last_budget_report["recent_final_chars"] = sum(len(message.content) for message in selected)
+        self.last_budget_report["recent_original_chars"] = sum(self._message_size(message) for message in messages)
+        self.last_budget_report["recent_final_chars"] = sum(self._message_size(message) for message in selected)
         self.last_budget_report["recent_excluded"] = excluded
         return selected
 
@@ -171,3 +185,30 @@ class LLMPromptBuilder:
         if keep_tail:
             return marker + text[-(max_chars - len(marker)):]
         return text[: max_chars - len(marker)] + marker
+
+    @staticmethod
+    def _multimodal_content(text: str, images: list) -> list[dict[str, object]]:
+        content: list[dict[str, object]] = [{"type": "text", "text": text}]
+        content.extend(image.to_openai_content_part() for image in images)
+        return content
+
+    @staticmethod
+    def _message_size(message: ChatMessage) -> int:
+        if isinstance(message.content, str):
+            return len(message.content)
+        total = 0
+        for part in message.content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                total += len(str(part.get("text", "")))
+        return total
+
+    def _clip_message(self, message: ChatMessage, max_chars: int) -> ChatMessage:
+        if isinstance(message.content, str):
+            return ChatMessage(role=message.role, content=self._clip_text(message.content, max_chars, keep_tail=True))
+        clipped: list[dict[str, object]] = []
+        for part in message.content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                clipped.append({**part, "text": self._clip_text(str(part.get("text", "")), max_chars, keep_tail=True)})
+            else:
+                clipped.append(part)
+        return ChatMessage(role=message.role, content=clipped)

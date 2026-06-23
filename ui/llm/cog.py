@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.llm.config import LLMSettings, load_llm_settings
+from core.llm.images import MAX_LLM_IMAGES, LLMImageInput, is_supported_image, prepare_llm_image
 from core.llm.models import LLMInputMessage
 from core.llm.service import LLMService
 from core.local import LocalCore
@@ -15,6 +16,9 @@ from ui.llm.typing_manager import LLMTypingManager
 
 logger = logging.getLogger(__name__)
 MAX_USER_INPUT_CHARS = 200
+DISCORD_MESSAGE_LIMIT = 2000
+MAX_LLM_RESPONSE_CHARS = 4000
+TOO_LONG_RESPONSE_MESSAGE = "LLM 응답이 너무 길어 전송하지 않았습니다."
 
 
 class LLMCog(commands.Cog):
@@ -77,14 +81,31 @@ class LLMCog(commands.Cog):
                     await message.channel.send(failure)
                 return
 
+            images, image_error = await self._collect_images(message)
+            if image_error:
+                try:
+                    await message.reply(image_error, mention_author=False)
+                except Exception:
+                    await message.channel.send(image_error)
+                return
             await self.typing.start(guild_id, channel_id, message.channel)
 
             async def send_response(content: str) -> None:
                 reply_text = content.strip() or "응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요."
-                try:
-                    await message.reply(reply_text, mention_author=False)
-                except Exception:
-                    await message.channel.send(reply_text)
+                chunks = split_discord_response(reply_text)
+                if chunks is None:
+                    chunks = [TOO_LONG_RESPONSE_MESSAGE]
+                for index, chunk in enumerate(chunks):
+                    try:
+                        if index == 0:
+                            await message.reply(chunk, mention_author=False)
+                        else:
+                            await message.channel.send(chunk)
+                    except Exception:
+                        if index == 0:
+                            await message.channel.send(chunk)
+                        else:
+                            raise
 
             async def complete_message() -> None:
                 await self.typing.stop(guild_id, channel_id)
@@ -97,6 +118,7 @@ class LLMCog(commands.Cog):
                     author_name=message.author.display_name,
                     content=content,
                     is_admin=getattr(message.author.guild_permissions, "administrator", False),
+                    images=images,
                 ),
                 send_response=send_response,
                 complete_message=complete_message,
@@ -104,6 +126,28 @@ class LLMCog(commands.Cog):
         except Exception:
             logger.exception("LLM message handling failed", extra={"guild_id": guild_id, "channel_id": channel_id})
             await self.typing.stop(guild_id, channel_id)
+
+    async def _collect_images(self, message: discord.Message) -> tuple[list[LLMImageInput], str | None]:
+        images: list[LLMImageInput] = []
+        for attachment in message.attachments:
+            if len(images) >= MAX_LLM_IMAGES:
+                break
+            filename = attachment.filename or ""
+            content_type = attachment.content_type
+            if not is_supported_image(filename, content_type):
+                continue
+            try:
+                prepared = prepare_llm_image(filename, content_type, await attachment.read())
+            except Exception:
+                logger.exception(
+                    "LLM image attachment processing failed",
+                    extra={"attachment_filename": filename, "attachment_content_type": content_type},
+                )
+                display_name = filename or "이미지"
+                return images, f"{display_name} 이미지를 불러오지 못했습니다. 잠시 후 다시 업로드해서 시도해 주세요."
+            if prepared is not None:
+                images.append(prepared)
+        return images, None
 
     def _guild_enabled(self, interaction: discord.Interaction) -> bool:
         return interaction.guild is not None and str(interaction.guild.id) in self.settings.guild_channel_map
@@ -242,3 +286,55 @@ class LLMCog(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(LLMCog(bot))
+
+
+def split_discord_response(text: str) -> list[str] | None:
+    if len(text) <= DISCORD_MESSAGE_LIMIT:
+        return [text]
+    if len(text) > MAX_LLM_RESPONSE_CHARS:
+        return None
+    first, second = _split_text_near_limit(text, DISCORD_MESSAGE_LIMIT)
+    return _balance_code_fences(first, second)
+
+
+def _split_text_near_limit(text: str, limit: int) -> tuple[str, str]:
+    split_at = text.rfind("\n", 0, limit + 1)
+    if split_at <= 0:
+        split_at = text.rfind(" ", 0, limit + 1)
+    if split_at <= 0:
+        split_at = limit
+    first = text[:split_at].rstrip()
+    second = text[split_at:].lstrip()
+    return first, second
+
+
+def _balance_code_fences(first: str, second: str) -> list[str]:
+    if not _has_unclosed_code_fence(first):
+        return [first, second]
+
+    language = _open_code_fence_language(first)
+    close_fence = "\n```"
+    reopen_fence = f"```{language}\n" if language else "```\n"
+    if len(first) + len(close_fence) <= DISCORD_MESSAGE_LIMIT and len(reopen_fence) + len(second) <= DISCORD_MESSAGE_LIMIT:
+        return [first + close_fence, reopen_fence + second]
+
+    return [_wrap_plain_text(first), _wrap_plain_text(second)]
+
+
+def _has_unclosed_code_fence(text: str) -> bool:
+    return len(_code_fence_lines(text)) % 2 == 1
+
+
+def _open_code_fence_language(text: str) -> str:
+    fences = _code_fence_lines(text)
+    if not fences:
+        return ""
+    return fences[-1][3:].strip()
+
+
+def _code_fence_lines(text: str) -> list[str]:
+    return [line.lstrip() for line in text.splitlines() if line.lstrip().startswith("```")]
+
+
+def _wrap_plain_text(text: str) -> str:
+    return "```\n" + text.replace("```", "'''")[: DISCORD_MESSAGE_LIMIT - 8] + "\n```"
