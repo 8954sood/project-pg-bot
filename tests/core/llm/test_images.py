@@ -1,9 +1,10 @@
 import base64
 import io
+import random
 
 from PIL import Image
 
-from core.llm.images import IMAGE_MAX_DIMENSION, is_supported_image, prepare_llm_image
+from core.llm.images import IMAGE_COMPRESS_THRESHOLD_BYTES, IMAGE_MAX_DIMENSION, IMAGE_TARGET_BYTES, is_supported_image, prepare_llm_image
 
 
 def test_prepare_llm_image_preserves_small_supported_image():
@@ -29,6 +30,17 @@ def test_prepare_llm_image_resizes_large_image_for_model_input():
     assert max(processed.size) <= IMAGE_MAX_DIMENSION
 
 
+def test_prepare_llm_image_compresses_above_700kb_toward_600kb_target():
+    original = _noisy_png_bytes(1200, 1200)
+
+    image = prepare_llm_image("large.png", "image/png", original)
+
+    assert image is not None
+    assert len(original) > IMAGE_COMPRESS_THRESHOLD_BYTES
+    assert image.media_type == "image/jpeg"
+    assert image.processed_bytes <= IMAGE_TARGET_BYTES
+
+
 def test_supported_image_detection_uses_content_type_or_filename():
     assert is_supported_image("photo.bin", "image/jpeg")
     assert is_supported_image("photo.webp", None)
@@ -38,4 +50,16 @@ def test_supported_image_detection_uses_content_type_or_filename():
 def _png_bytes(width: int, height: int) -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (width, height), color=(255, 0, 0)).save(output, format="PNG")
+    return output.getvalue()
+
+
+def _noisy_png_bytes(width: int, height: int) -> bytes:
+    random.seed(1)
+    image = Image.new("RGB", (width, height))
+    pixels = image.load()
+    for y in range(height):
+        for x in range(width):
+            pixels[x, y] = (random.randrange(256), random.randrange(256), random.randrange(256))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
     return output.getvalue()

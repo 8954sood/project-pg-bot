@@ -4,6 +4,7 @@ import pytest
 
 from core.llm.config import LLMSettings, LLMProviderConfig
 from core.llm.engine import LLMEngine
+from core.llm.images import LLMImageInput
 from core.llm.llm_client import LLMClientResponse
 from core.llm.models import LLMInputMessage, ToolCall
 from core.llm.service import LLMService
@@ -27,6 +28,15 @@ class FakeClient:
         else:
             content, tool_calls = "응답", []
         return LLMClientResponse(content=content, provider_path="fake", tool_calls=list(tool_calls))
+
+
+class RecordingClient:
+    def __init__(self):
+        self.calls: list[list[dict]] = []
+
+    async def chat(self, config, messages, *, tools=None, tool_choice="auto"):
+        self.calls.append(messages)
+        return LLMClientResponse(content="응답", provider_path="fake")
 
 
 class FakeWebSearchTool(LLMTool):
@@ -110,6 +120,18 @@ def make_service_with_tools(client, tool_classes):
     return LLMService(settings(), engine=engine, tools=registry, sleep=no_sleep)
 
 
+def make_service_with_cache(client, tmp_path, *, max_recent_conversation_lines=12):
+    local_settings = LLMSettings(
+        guild_channel_map={"1": {"2", "3"}},
+        main=LLMProviderConfig(api_key="k", model="m"),
+        debounce_seconds=0,
+        max_recent_conversation_lines=max_recent_conversation_lines,
+    )
+    registry = LLMToolRegistry()
+    engine = LLMEngine(local_settings, client=client, tools=registry)
+    return LLMService(local_settings, engine=engine, tools=registry, sleep=no_sleep, image_cache_dir=tmp_path / "llm-images")
+
+
 async def enqueue_and_flush(service, message, *, send, complete):
     key = (message.guild_id, message.channel_id)
     await service.enqueue_message(message, send_response=send, complete_message=complete)
@@ -119,6 +141,90 @@ async def enqueue_and_flush(service, message, *, send, complete):
 
 async def _noop_complete():
     return None
+
+
+def image_input(name: str = "image.png") -> LLMImageInput:
+    return LLMImageInput(
+        media_type="image/jpeg",
+        data_base64="aW1hZ2UtZGF0YQ==",
+        original_bytes=20,
+        processed_bytes=10,
+        filename=name,
+    )
+
+
+def multimodal_user_messages(messages: list[dict]) -> list[dict]:
+    return [
+        message
+        for message in messages
+        if message.get("role") == "user" and isinstance(message.get("content"), list)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recent_image_message_is_reattached_on_next_flush(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
+    await LocalCore.init_tables()
+    client = RecordingClient()
+    service = make_service_with_cache(client, tmp_path)
+    sent = []
+
+    async def send(content):
+        sent.append(content)
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "김민준 vs 웅진", images=[image_input()], is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "이미지 구도 설명해줘", is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+
+    second_call_multimodal = multimodal_user_messages(client.calls[1])
+    assert len(second_call_multimodal) == 1
+    content = second_call_multimodal[0]["content"]
+    assert content[0]["type"] == "text"
+    assert "User: 김민준 vs 웅진" in content[0]["text"]
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"] == "data:image/jpeg;base64,aW1hZ2UtZGF0YQ=="
+
+
+@pytest.mark.asyncio
+async def test_recent_image_cache_deletes_files_outside_recent_prompt_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(path_module, "db_path", str(tmp_path / "db.sqlite"))
+    await LocalCore.init_tables()
+    client = RecordingClient()
+    service = make_service_with_cache(client, tmp_path, max_recent_conversation_lines=2)
+    sent = []
+
+    async def send(content):
+        sent.append(content)
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "첫 이미지", images=[image_input("first.jpg")], is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+    first_paths = [image.file_path for images in service.image_cache[("1", "2")].values() for image in images]
+    assert first_paths and first_paths[0].exists()
+
+    await enqueue_and_flush(
+        service,
+        LLMInputMessage("1", "2", "user", "User", "둘째 이미지", images=[image_input("second.jpg")], is_admin=False),
+        send=send,
+        complete=_noop_complete,
+    )
+
+    assert not first_paths[0].exists()
+    remaining_paths = [image.file_path for images in service.image_cache[("1", "2")].values() for image in images]
+    assert len(remaining_paths) == 1
+    assert remaining_paths[0].exists()
 
 
 @pytest.mark.asyncio

@@ -79,6 +79,35 @@ def test_prompt_builder_adds_current_buffer_images_as_multimodal_content():
     assert current[1]["image_url"]["url"] == "data:image/png;base64,abc123"
 
 
+def test_prompt_builder_adds_recent_images_as_multimodal_content():
+    builder = LLMPromptBuilder(LLMSettings())
+    image = LLMImageInput(
+        media_type="image/jpeg",
+        data_base64="cached123",
+        original_bytes=10,
+        processed_bytes=10,
+        filename="cached.jpg",
+    )
+    memory_state = MemoryState(
+        recent_logs=[
+            RecentLogEntry(role="user", author_name="User1", content="김민준 vs 웅진", images=[image]),
+            RecentLogEntry(role="assistant", content="위쪽이 이길 것 같아."),
+        ]
+    )
+    conversation = BufferedConversation(
+        messages=[Message(author_id="u1", author_name="User1", content="구도 설명해줘")],
+        started_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+        closed_at=datetime(2026, 6, 18, tzinfo=timezone.utc),
+    )
+
+    messages = builder.build_messages(conversation=conversation, memory_state=memory_state)
+    recent = next(message.content for message in messages if isinstance(message.content, list))
+
+    assert recent[0]["type"] == "text"
+    assert recent[0]["text"] == "User1: 김민준 vs 웅진"
+    assert recent[1]["image_url"]["url"] == "data:image/jpeg;base64,cached123"
+
+
 def test_system_prompt_contains_memory_ownership_and_non_transfer_rules():
     assert "Users may only save, edit, or delete their own personal memory" in SYSTEM_PROMPT
     assert "Never apply one user's personal tone" in SYSTEM_PROMPT

@@ -90,16 +90,29 @@ class ServerMemory:
 class RecentLogEntry:
     role: Literal["user", "assistant"]
     content: str
+    id: int | None = None
     author_id: str | None = None
     author_name: str | None = None
+    images: list[LLMImageInput] = field(default_factory=list)
     timestamp: datetime = field(default_factory=utc_now)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "role": self.role,
             "content": self.content,
+            "id": self.id,
             "author_id": self.author_id,
             "author_name": self.author_name,
+            "images": [
+                {
+                    "media_type": image.media_type,
+                    "data_base64": image.data_base64,
+                    "original_bytes": image.original_bytes,
+                    "processed_bytes": image.processed_bytes,
+                    "filename": image.filename,
+                }
+                for image in self.images
+            ],
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -108,8 +121,20 @@ class RecentLogEntry:
         return cls(
             role=data["role"],
             content=str(data["content"]),
+            id=data.get("id"),
             author_id=data.get("author_id"),
             author_name=data.get("author_name"),
+            images=[
+                LLMImageInput(
+                    media_type=str(image["media_type"]),
+                    data_base64=str(image["data_base64"]),
+                    original_bytes=int(image["original_bytes"]),
+                    processed_bytes=int(image["processed_bytes"]),
+                    filename=str(image.get("filename", "")),
+                )
+                for image in data.get("images", [])
+                if isinstance(image, dict)
+            ],
             timestamp=datetime.fromisoformat(str(data["timestamp"])),
         )
 

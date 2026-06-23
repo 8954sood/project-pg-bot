@@ -114,9 +114,7 @@ class LLMPromptBuilder:
             keep_tail=True,
         )
         if conversation.images:
-            content: list[dict[str, object]] = [{"type": "text", "text": current_buffer}]
-            content.extend(image.to_openai_content_part() for image in conversation.images)
-            return ChatMessage(role="user", content=content)
+            return ChatMessage(role="user", content=self._multimodal_content(current_buffer, conversation.images))
         return ChatMessage(role="user", content=current_buffer)
 
     @staticmethod
@@ -134,7 +132,11 @@ class LLMPromptBuilder:
                 messages.append(ChatMessage(role="assistant", content=entry.content))
             else:
                 author = entry.author_name or entry.author_id or "user"
-                messages.append(ChatMessage(role="user", content=f"{author}: {entry.content}"))
+                content = f"{author}: {entry.content}"
+                if entry.images:
+                    messages.append(ChatMessage(role="user", content=LLMPromptBuilder._multimodal_content(content, entry.images)))
+                else:
+                    messages.append(ChatMessage(role="user", content=content))
         return messages
 
     @staticmethod
@@ -151,19 +153,19 @@ class LLMPromptBuilder:
         total = 0
         excluded = 0
         for message in reversed(messages):
-            size = len(message.content)
+            size = self._message_size(message)
             if selected and total + size > max_chars:
                 excluded += 1
                 continue
             if not selected and size > max_chars:
-                selected.append(ChatMessage(role=message.role, content=self._clip_text(message.content, max_chars, keep_tail=True)))
+                selected.append(self._clip_message(message, max_chars))
                 total = max_chars
                 continue
             selected.append(message)
             total += size
         selected.reverse()
-        self.last_budget_report["recent_original_chars"] = sum(len(message.content) for message in messages)
-        self.last_budget_report["recent_final_chars"] = sum(len(message.content) for message in selected)
+        self.last_budget_report["recent_original_chars"] = sum(self._message_size(message) for message in messages)
+        self.last_budget_report["recent_final_chars"] = sum(self._message_size(message) for message in selected)
         self.last_budget_report["recent_excluded"] = excluded
         return selected
 
@@ -183,3 +185,30 @@ class LLMPromptBuilder:
         if keep_tail:
             return marker + text[-(max_chars - len(marker)):]
         return text[: max_chars - len(marker)] + marker
+
+    @staticmethod
+    def _multimodal_content(text: str, images: list) -> list[dict[str, object]]:
+        content: list[dict[str, object]] = [{"type": "text", "text": text}]
+        content.extend(image.to_openai_content_part() for image in images)
+        return content
+
+    @staticmethod
+    def _message_size(message: ChatMessage) -> int:
+        if isinstance(message.content, str):
+            return len(message.content)
+        total = 0
+        for part in message.content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                total += len(str(part.get("text", "")))
+        return total
+
+    def _clip_message(self, message: ChatMessage, max_chars: int) -> ChatMessage:
+        if isinstance(message.content, str):
+            return ChatMessage(role=message.role, content=self._clip_text(message.content, max_chars, keep_tail=True))
+        clipped: list[dict[str, object]] = []
+        for part in message.content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                clipped.append({**part, "text": self._clip_text(str(part.get("text", "")), max_chars, keep_tail=True)})
+            else:
+                clipped.append(part)
+        return ChatMessage(role=message.role, content=clipped)

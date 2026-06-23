@@ -1,13 +1,15 @@
 import base64
 import io
+from pathlib import Path
 from dataclasses import dataclass
 
 from PIL import Image, ImageOps
 
 MAX_LLM_IMAGES = 3
-IMAGE_COMPRESS_THRESHOLD_BYTES = 1_000_000
+IMAGE_COMPRESS_THRESHOLD_BYTES = 700_000
+IMAGE_TARGET_BYTES = 600_000
 IMAGE_MAX_DIMENSION = 1568
-JPEG_QUALITY_STEPS = (85, 75, 65)
+JPEG_QUALITY_STEPS = (85, 80, 75, 70, 65, 60, 55, 50, 45, 40)
 
 _EXTENSION_MEDIA_TYPES = {
     ".gif": "image/gif",
@@ -31,6 +33,31 @@ class LLMImageInput:
             "type": "image_url",
             "image_url": {"url": f"data:{self.media_type};base64,{self.data_base64}"},
         }
+
+    def raw_bytes(self) -> bytes:
+        return base64.b64decode(self.data_base64)
+
+
+@dataclass(frozen=True, slots=True)
+class CachedLLMImage:
+    media_type: str
+    file_path: Path
+    original_bytes: int
+    processed_bytes: int
+    filename: str = ""
+
+    def to_input(self) -> LLMImageInput | None:
+        try:
+            data = self.file_path.read_bytes()
+        except OSError:
+            return None
+        return LLMImageInput(
+            media_type=self.media_type,
+            data_base64=base64.b64encode(data).decode("ascii"),
+            original_bytes=self.original_bytes,
+            processed_bytes=len(data),
+            filename=self.filename,
+        )
 
 
 def is_supported_image(filename: str, content_type: str | None) -> bool:
@@ -86,7 +113,7 @@ def _compress_if_needed(data: bytes, media_type: str) -> tuple[bytes, str]:
                 if len(candidate) < len(best) or force_resized:
                     best = candidate
                     best_media_type = "image/jpeg"
-                if len(candidate) <= IMAGE_COMPRESS_THRESHOLD_BYTES:
+                if len(candidate) <= IMAGE_TARGET_BYTES:
                     break
             return best, best_media_type
     except Exception:
