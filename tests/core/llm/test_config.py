@@ -30,3 +30,9 @@ def test_llm_test_compatible_env_names():
     assert settings.main.max_tokens == 77
     assert settings.max_recent_conversation_lines == 5
     assert settings.is_allowed("1", "2")
+
+
+def test_llm_default_timeout_allows_slow_cloud_responses():
+    settings = load_llm_settings({})
+
+    assert settings.main.timeout_seconds == 180

@@ -68,6 +68,8 @@ class OpenAICompatibleClient:
             return [base]
         if base.endswith("/v1"):
             return [base + "/chat/completions"]
+        if base in {"https://ollama.com", "http://ollama.com"}:
+            return [base + "/v1/chat/completions"]
         return [base + "/v1/chat/completions", base + "/api/chat"]
 
     def _post_chat(

@@ -15,6 +15,9 @@ def test_ollama_and_openai_candidate_urls_match_llm_test_behavior():
         "https://ollama.example/v1/chat/completions",
         "https://ollama.example/api/chat",
     ]
+    assert client._candidate_paths("https://ollama.com") == [
+        "https://ollama.com/v1/chat/completions",
+    ]
 
 
 def test_llm_request_jsonl_writes_payload_without_authorization(tmp_path, monkeypatch):

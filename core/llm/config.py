@@ -58,7 +58,7 @@ class LLMProviderConfig:
     api_key: str = field(default="", repr=False)
     base_url: str = "https://api.openai.com/v1"
     model: str = ""
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 180.0
     temperature: float = 0.7
     max_tokens: int = 1024
 
@@ -107,7 +107,7 @@ def load_llm_settings(environ: Mapping[str, str] | None = None) -> LLMSettings:
         api_key=_first_env(env, "LLM_API_KEY", "OPENAI_API_KEY", "API_KEY"),
         base_url=_first_env(env, "LLM_BASE_URL", "OPENAI_BASE_URL", "BASE_URL", default="https://api.openai.com/v1"),
         model=_first_env(env, "LLM_MODEL", "OPENAI_MODEL", "MODEL"),
-        timeout_seconds=_float(_first_env(env, "LLM_TIMEOUT_SECONDS", "OPENAI_TIMEOUT_SECONDS", default="60"), 60.0),
+        timeout_seconds=_float(_first_env(env, "LLM_TIMEOUT_SECONDS", "OPENAI_TIMEOUT_SECONDS", default="180"), 180.0),
         temperature=_float(_first_env(env, "LLM_TEMPERATURE", "OPENAI_TEMPERATURE", default="0.7"), 0.7),
         max_tokens=_int(_first_env(env, "LLM_MAX_TOKENS", "OPENAI_MAX_TOKENS", default="1024"), 1024),
     )
