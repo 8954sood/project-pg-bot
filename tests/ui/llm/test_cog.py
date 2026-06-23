@@ -6,7 +6,7 @@ import pytest
 
 from core.llm.config import LLMSettings
 from core.local import LocalCore
-from ui.llm.cog import LLMCog, MAX_USER_INPUT_CHARS
+from ui.llm.cog import DISCORD_MESSAGE_LIMIT, LLMCog, MAX_USER_INPUT_CHARS, TOO_LONG_RESPONSE_MESSAGE, split_discord_response
 from ui.llm.consent_view import LLMConsentView
 
 
@@ -322,6 +322,51 @@ async def test_send_response_falls_back_to_channel_send_when_reply_fails(monkeyp
 
     assert message.replies == []
     assert channel.sent == [(("응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요.",), {})]
+
+
+@pytest.mark.asyncio
+async def test_send_response_splits_long_response(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel)
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+    send_response = cog.service.enqueue_message.await_args.kwargs["send_response"]
+    await send_response("가" * 2500)
+
+    assert len(message.replies) == 1
+    assert len(message.replies[0][0][0]) == DISCORD_MESSAGE_LIMIT
+    assert channel.sent == [(("가" * 500,), {})]
+
+
+@pytest.mark.asyncio
+async def test_send_response_rejects_over_4000_chars(monkeypatch):
+    cog = make_cog()
+    channel = FakeChannel()
+    consent = SimpleNamespace(consented=1)
+    message = make_message(channel=channel)
+    monkeypatch.setattr(LocalCore, "llmConsentDataSource", SimpleNamespace(get=AsyncMock(return_value=consent)))
+
+    await cog.on_message(message)
+    send_response = cog.service.enqueue_message.await_args.kwargs["send_response"]
+    await send_response("가" * 4001)
+
+    assert message.replies == [((TOO_LONG_RESPONSE_MESSAGE,), {"mention_author": False})]
+    assert channel.sent == []
+
+
+def test_split_discord_response_reopens_code_fence_across_chunks():
+    text = "```python\n" + ("print('hello')\n" * 150) + "```"
+
+    chunks = split_discord_response(text)
+
+    assert chunks is not None
+    assert len(chunks) == 2
+    assert all(len(chunk) <= DISCORD_MESSAGE_LIMIT for chunk in chunks)
+    assert chunks[0].endswith("\n```")
+    assert chunks[1].startswith("```python\n")
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,9 @@ from ui.llm.typing_manager import LLMTypingManager
 
 logger = logging.getLogger(__name__)
 MAX_USER_INPUT_CHARS = 200
+DISCORD_MESSAGE_LIMIT = 2000
+MAX_LLM_RESPONSE_CHARS = 4000
+TOO_LONG_RESPONSE_MESSAGE = "LLM 응답이 너무 길어 전송하지 않았습니다."
 
 
 class LLMCog(commands.Cog):
@@ -89,10 +92,20 @@ class LLMCog(commands.Cog):
 
             async def send_response(content: str) -> None:
                 reply_text = content.strip() or "응답을 생성하지 못했습니다. 다시 한 번 말씀해 주세요."
-                try:
-                    await message.reply(reply_text, mention_author=False)
-                except Exception:
-                    await message.channel.send(reply_text)
+                chunks = split_discord_response(reply_text)
+                if chunks is None:
+                    chunks = [TOO_LONG_RESPONSE_MESSAGE]
+                for index, chunk in enumerate(chunks):
+                    try:
+                        if index == 0:
+                            await message.reply(chunk, mention_author=False)
+                        else:
+                            await message.channel.send(chunk)
+                    except Exception:
+                        if index == 0:
+                            await message.channel.send(chunk)
+                        else:
+                            raise
 
             async def complete_message() -> None:
                 await self.typing.stop(guild_id, channel_id)
@@ -273,3 +286,55 @@ class LLMCog(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(LLMCog(bot))
+
+
+def split_discord_response(text: str) -> list[str] | None:
+    if len(text) <= DISCORD_MESSAGE_LIMIT:
+        return [text]
+    if len(text) > MAX_LLM_RESPONSE_CHARS:
+        return None
+    first, second = _split_text_near_limit(text, DISCORD_MESSAGE_LIMIT)
+    return _balance_code_fences(first, second)
+
+
+def _split_text_near_limit(text: str, limit: int) -> tuple[str, str]:
+    split_at = text.rfind("\n", 0, limit + 1)
+    if split_at <= 0:
+        split_at = text.rfind(" ", 0, limit + 1)
+    if split_at <= 0:
+        split_at = limit
+    first = text[:split_at].rstrip()
+    second = text[split_at:].lstrip()
+    return first, second
+
+
+def _balance_code_fences(first: str, second: str) -> list[str]:
+    if not _has_unclosed_code_fence(first):
+        return [first, second]
+
+    language = _open_code_fence_language(first)
+    close_fence = "\n```"
+    reopen_fence = f"```{language}\n" if language else "```\n"
+    if len(first) + len(close_fence) <= DISCORD_MESSAGE_LIMIT and len(reopen_fence) + len(second) <= DISCORD_MESSAGE_LIMIT:
+        return [first + close_fence, reopen_fence + second]
+
+    return [_wrap_plain_text(first), _wrap_plain_text(second)]
+
+
+def _has_unclosed_code_fence(text: str) -> bool:
+    return len(_code_fence_lines(text)) % 2 == 1
+
+
+def _open_code_fence_language(text: str) -> str:
+    fences = _code_fence_lines(text)
+    if not fences:
+        return ""
+    return fences[-1][3:].strip()
+
+
+def _code_fence_lines(text: str) -> list[str]:
+    return [line.lstrip() for line in text.splitlines() if line.lstrip().startswith("```")]
+
+
+def _wrap_plain_text(text: str) -> str:
+    return "```\n" + text.replace("```", "'''")[: DISCORD_MESSAGE_LIMIT - 8] + "\n```"
