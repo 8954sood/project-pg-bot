@@ -14,6 +14,16 @@ LLM 상태는 별도 JSON 파일이 아니라 기존 로컬 SQLite DB(`core/loca
 
 LLM 설정은 `.env.example`을 참고하세요. `LLM_*` 값이 가장 우선이고, 그 다음 `OPENAI_*`, 마지막으로 generic `API_KEY`, `BASE_URL`, `MODEL` 값을 사용합니다. prompt에 포함할 최근 대화 메시지 수는 `LLM_MAX_RECENT_CONVERSATION_LINES`로 조정하며 기본값은 `12`입니다. LLM 서버로 보내는 요청 payload는 분석을 위해 항상 `logs/llm_requests.jsonl`에 JSONL로 기록되며, API key/Authorization 헤더는 기록하지 않습니다.
 
+### 웹 검색 도구
+
+MAIN LLM이 `web_search` tool call을 선택하면 Firecrawl Search API를 통해 최신 웹 검색 결과를 가져옵니다. 이 기능을 사용하려면 `.env`에 `FIRECRAWL_API_KEY`를 설정해야 합니다. 기본 API 주소는 `https://api.firecrawl.dev`이며, 자체 호스팅 Firecrawl을 사용할 경우 `FIRECRAWL_BASE_URL`로 변경할 수 있습니다.
+
+```env
+FIRECRAWL_API_KEY=fc-YOUR_API_KEY
+FIRECRAWL_BASE_URL=https://api.firecrawl.dev
+LLM_WEB_SEARCH_TIMEOUT_SECONDS=20
+```
+
 테스트는 실제 Discord 접속 없이 mock/fake 객체를 사용합니다.
 
 ```bash
