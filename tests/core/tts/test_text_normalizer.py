@@ -13,6 +13,21 @@ def test_mixed_text_replaces_question_and_period():
     assert normalize_tts_text("a?b.") == "a물음표b(점)"
 
 
+def test_custom_emoji_is_read_as_emoji():
+    assert normalize_tts_text("hello <:party:123456789>!") == "hello 이모지!"
+
+
+def test_animated_and_adjacent_custom_emojis_are_read_as_emoji():
+    assert (
+        normalize_tts_text("<a:dance:123><:wave:456>?")
+        == "이모지이모지물음표"
+    )
+
+
+def test_unicode_emoji_and_invalid_custom_emoji_text_are_unchanged():
+    assert normalize_tts_text("😀 <not-an-emoji>") == "😀 <not-an-emoji>"
+
+
 def test_image_text_prefixes_existing_text():
     assert build_tts_text("hello", True) == "(이미지)hello"
 
