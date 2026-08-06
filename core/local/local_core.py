@@ -3,6 +3,7 @@ from core.local.user import UserDataSource
 from core.local.voiceoption import VoiceOptionDataSource
 from core.local.ttsengine import TTSEngineOptionDataSource, TTSEngineAllowDataSource
 from core.local.sleep_timer import SleepTimerDataSource
+from core.local.ban_channel import BanChannelDataSource
 from core.local.llm import (
     LLMConsentDataSource,
     LLMGlobalMemoryDataSource,
@@ -20,6 +21,7 @@ class LocalCore:
     ttsEngineOptionDataSource: TTSEngineOptionDataSource = TTSEngineOptionDataSource
     ttsEngineAllowDataSource: TTSEngineAllowDataSource = TTSEngineAllowDataSource
     sleepTimerDataSource: SleepTimerDataSource = SleepTimerDataSource
+    banChannelDataSource: BanChannelDataSource = BanChannelDataSource
     llmConsentDataSource: LLMConsentDataSource = LLMConsentDataSource
     llmGlobalMemoryDataSource: LLMGlobalMemoryDataSource = LLMGlobalMemoryDataSource
     llmUserMemoryDataSource: LLMUserMemoryDataSource = LLMUserMemoryDataSource
@@ -35,6 +37,7 @@ class LocalCore:
         await LocalCore.ttsEngineOptionDataSource.init_table()
         await LocalCore.ttsEngineAllowDataSource.init_table()
         await LocalCore.sleepTimerDataSource.init_table()
+        await LocalCore.banChannelDataSource.init_table()
         await LocalCore.llmConsentDataSource.init_table()
         await LocalCore.llmGlobalMemoryDataSource.init_table()
         await LocalCore.llmUserMemoryDataSource.init_table()

@@ -17,6 +17,7 @@ class CogManager(commands.Cog):
             "role": "ui.role.cog",
             "emoji": "ui.emoji.cog",
             "emoji_register": "ui.emoji.cog",
+            "ban_channel": "ui.ban_channel.cog",
             "cog_manager": "ui.cog_manager.cog",
         }
         return simple_map.get(name, f"ui.{name}.cog")
@@ -57,4 +58,3 @@ class CogManager(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(CogManager(bot))
-

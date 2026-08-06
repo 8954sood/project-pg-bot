@@ -11,6 +11,7 @@ EXTENSIONS = (
     "ui.sleep_timer.cog",
     "ui.role.cog",
     "ui.emoji.cog",
+    "ui.ban_channel.cog",
     "ui.cog_manager.cog",
     "ui.llm.cog",
 )
