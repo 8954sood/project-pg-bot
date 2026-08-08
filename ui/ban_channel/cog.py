@@ -39,6 +39,32 @@ class BanChannelCog(commands.Cog):
         )
 
     @staticmethod
+    def _ban_notice_embed(guild: discord.Guild) -> discord.Embed:
+        embed = discord.Embed(
+            title="🚫 서버에서 자동으로 차단되었습니다.",
+            description=(
+                f"**{guild.name}**의 자동 밴 채널에 메시지가 작성되어 "
+                "자동으로 서버에서 차단되었습니다."
+            ),
+            colour=discord.Colour.red(),
+        )
+        embed.add_field(
+            name="실수로 메시지를 작성하셨나요?",
+            value=(
+                "아래 계정 중 한 명에게 **친구 요청을 보낸 뒤** "
+                "차단 해제를 문의해주세요."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="문의 계정",
+            value="`babihoba` 또는 `lindendong`",
+            inline=False,
+        )
+        embed.set_footer(text="차단 해제 여부는 관리자 확인 후 결정됩니다.")
+        return embed
+
+    @staticmethod
     def _missing_bot_permissions(
         guild: discord.Guild,
         channel: discord.TextChannel,
@@ -310,7 +336,31 @@ class BanChannelCog(commands.Cog):
                 "user_id": member.id,
             },
         )
+        await self._send_ban_notice_best_effort(
+            member,
+            guild=guild,
+            channel_id=channel_id,
+        )
         return True
+
+    async def _send_ban_notice_best_effort(
+        self,
+        member: discord.Member,
+        *,
+        guild: discord.Guild,
+        channel_id: int,
+    ) -> None:
+        try:
+            await member.send(embed=self._ban_notice_embed(guild))
+        except discord.DiscordException:
+            logger.info(
+                "Failed to send automatic ban notice DM",
+                extra={
+                    "guild_id": guild.id,
+                    "channel_id": channel_id,
+                    "user_id": member.id,
+                },
+            )
 
     async def _delete_warning_best_effort(
         self,
