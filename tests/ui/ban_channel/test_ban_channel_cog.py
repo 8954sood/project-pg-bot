@@ -12,6 +12,7 @@ from ui.ban_channel.cog import BanChannelCog
 def make_message(*, administrator=False, bot=False, webhook_id=None):
     guild = SimpleNamespace(
         id=1,
+        name="Test Guild",
         owner_id=999,
         me=SimpleNamespace(top_role=10),
         ban=AsyncMock(),
@@ -24,6 +25,7 @@ def make_message(*, administrator=False, bot=False, webhook_id=None):
         guild_permissions=SimpleNamespace(administrator=administrator),
         guild=guild,
         top_role=1,
+        send=AsyncMock(),
     )
     message = SimpleNamespace(
         guild=guild,
@@ -137,6 +139,26 @@ async def test_non_admin_message_bans_without_deleting_history_then_deletes_trig
         delete_message_seconds=0,
         reason="자동 밴 채널 메시지 작성 (channel_id=20)",
     )
+    message.author.send.assert_awaited_once()
+    embed = message.author.send.await_args.kwargs["embed"]
+    assert isinstance(embed, discord.Embed)
+    assert "자동으로 차단" in embed.title
+    assert "babihoba" in embed.fields[1].value
+    assert "lindendong" in embed.fields[1].value
+    message.delete.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_dm_failure_does_not_cancel_successful_ban():
+    cog, _ = make_cog()
+    message = make_message()
+    response = SimpleNamespace(status=403, reason="Forbidden")
+    message.author.send.side_effect = discord.Forbidden(response, "blocked")
+
+    await cog.on_message(message)
+
+    message.guild.ban.assert_awaited_once()
+    message.author.send.assert_awaited_once()
     message.delete.assert_awaited_once_with()
 
 
