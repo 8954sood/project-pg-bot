@@ -6,6 +6,7 @@ import discord
 import pytest
 from discord.ext.commands import CommandError
 
+from core.ban_channel.models import BanChannelConfig
 from ui.ban_channel.cog import BanChannelCog
 
 
@@ -105,6 +106,7 @@ async def test_every_subcommand_has_runtime_admin_check():
 async def test_set_command_posts_warning_and_persists_config():
     service = SimpleNamespace(
         get_config=Mock(return_value=None),
+        get_configs=Mock(return_value=[]),
         set_config=AsyncMock(),
     )
     cog = BanChannelCog(SimpleNamespace(), service)
@@ -121,7 +123,99 @@ async def test_set_command_posts_warning_and_persists_config():
         warning_message_id=warning_message.id,
     )
     interaction.response.send_message.assert_awaited_once_with(
-        "자동 밴 채널을 #trap로 설정했습니다.",
+        "자동 밴 채널에 #trap을(를) 추가했습니다.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_command_rejects_a_fourth_channel_before_posting_warning():
+    service = SimpleNamespace(
+        get_config=Mock(return_value=None),
+        get_configs=Mock(return_value=[object(), object(), object()]),
+        set_config=AsyncMock(),
+    )
+    cog = BanChannelCog(SimpleNamespace(), service)
+    interaction, channel, _ = make_interaction_and_channel()
+    command = BanChannelCog.ban_channel.get_command("set")
+
+    await command.callback(cog, interaction, channel)
+
+    channel.send.assert_not_awaited()
+    service.set_config.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once_with(
+        "자동 밴 채널은 서버당 최대 3개까지 설정할 수 있습니다.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_clear_command_removes_only_the_selected_channel():
+    config = BanChannelConfig(guild_id=1, channel_id=20, warning_message_id=None)
+    service = SimpleNamespace(
+        get_configs=Mock(return_value=[config]),
+        get_config=Mock(return_value=config),
+        clear_config=AsyncMock(),
+    )
+    cog = BanChannelCog(SimpleNamespace(), service)
+    interaction, channel, _ = make_interaction_and_channel()
+    command = BanChannelCog.ban_channel.get_command("clear")
+
+    await command.callback(cog, interaction, channel)
+
+    service.clear_config.assert_awaited_once_with(1, 20)
+    interaction.response.send_message.assert_awaited_once_with(
+        "자동 밴 채널에서 #trap을(를) 해제했습니다.",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_clear_command_lists_all_channels_when_clearing_everything():
+    configs = [
+        BanChannelConfig(guild_id=1, channel_id=20, warning_message_id=None),
+        BanChannelConfig(guild_id=1, channel_id=30, warning_message_id=None),
+    ]
+    service = SimpleNamespace(
+        get_configs=Mock(return_value=configs),
+        clear_all_configs=AsyncMock(return_value=configs),
+    )
+    cog = BanChannelCog(SimpleNamespace(), service)
+    interaction, _, _ = make_interaction_and_channel()
+    interaction.guild.get_channel.side_effect = [
+        SimpleNamespace(mention="#first"),
+        SimpleNamespace(mention="#second"),
+    ]
+    command = BanChannelCog.ban_channel.get_command("clear")
+
+    await command.callback(cog, interaction)
+
+    service.clear_all_configs.assert_awaited_once_with(1)
+    interaction.response.send_message.assert_awaited_once_with(
+        "다음 자동 밴 채널 설정을 해제했습니다:\n- #first\n- #second",
+        ephemeral=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_status_command_lists_all_configured_channels():
+    configs = [
+        BanChannelConfig(guild_id=1, channel_id=20, warning_message_id=100),
+        BanChannelConfig(guild_id=1, channel_id=30, warning_message_id=200),
+    ]
+    service = SimpleNamespace(get_configs=Mock(return_value=configs))
+    cog = BanChannelCog(SimpleNamespace(), service)
+    interaction, _, _ = make_interaction_and_channel()
+    interaction.guild.get_channel.side_effect = [
+        SimpleNamespace(mention="#first"),
+        SimpleNamespace(mention="#second"),
+    ]
+    command = BanChannelCog.ban_channel.get_command("status")
+
+    await command.callback(cog, interaction)
+
+    interaction.response.send_message.assert_awaited_once_with(
+        "현재 자동 밴 채널 (2/3): #first, #second",
         ephemeral=True,
     )
 
