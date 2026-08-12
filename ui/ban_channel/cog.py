@@ -7,7 +7,11 @@ from discord import app_commands
 from discord.ext import commands
 
 from core.ban_channel.models import BanChannelConfig
-from core.ban_channel.service import BanChannelService
+from core.ban_channel.service import (
+    MAX_BAN_CHANNELS_PER_GUILD,
+    BanChannelLimitReachedError,
+    BanChannelService,
+)
 from core.utile import is_admin
 
 
@@ -89,7 +93,7 @@ class BanChannelCog(commands.Cog):
                 missing.append(display_name)
         return missing
 
-    @ban_channel.command(name="set", description="자동 밴 채널을 설정합니다.")
+    @ban_channel.command(name="set", description="자동 밴 채널을 추가합니다.")
     @is_admin()
     async def set_channel(
         self,
@@ -104,6 +108,20 @@ class BanChannelCog(commands.Cog):
             )
             return
 
+        if self.service.get_config(guild.id, channel.id) is not None:
+            await interaction.response.send_message(
+                f"{channel.mention}은(는) 이미 자동 밴 채널로 설정되어 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        if len(self.service.get_configs(guild.id)) >= MAX_BAN_CHANNELS_PER_GUILD:
+            await interaction.response.send_message(
+                "자동 밴 채널은 서버당 최대 3개까지 설정할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
         missing_permissions = self._missing_bot_permissions(guild, channel)
         if missing_permissions:
             await interaction.response.send_message(
@@ -113,7 +131,6 @@ class BanChannelCog(commands.Cog):
             )
             return
 
-        previous_config = self.service.get_config(guild.id)
         try:
             warning_message = await channel.send(embed=self._warning_embed())
         except discord.DiscordException:
@@ -133,6 +150,17 @@ class BanChannelCog(commands.Cog):
                 channel_id=channel.id,
                 warning_message_id=warning_message.id,
             )
+        except BanChannelLimitReachedError:
+            await self._delete_message_best_effort(
+                warning_message,
+                guild_id=guild.id,
+                channel_id=channel.id,
+            )
+            await interaction.response.send_message(
+                "자동 밴 채널은 서버당 최대 3개까지 설정할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
         except Exception:
             logger.exception(
                 "Failed to persist ban channel config",
@@ -149,17 +177,18 @@ class BanChannelCog(commands.Cog):
             )
             return
 
-        if previous_config is not None:
-            await self._delete_warning_best_effort(guild, previous_config)
-
         await interaction.response.send_message(
-            f"자동 밴 채널을 {channel.mention}로 설정했습니다.",
+            f"자동 밴 채널에 {channel.mention}을(를) 추가했습니다.",
             ephemeral=True,
         )
 
     @ban_channel.command(name="clear", description="자동 밴 채널 설정을 해제합니다.")
     @is_admin()
-    async def clear_channel(self, interaction: discord.Interaction) -> None:
+    async def clear_channel(
+        self,
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel] = None,
+    ) -> None:
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -168,16 +197,51 @@ class BanChannelCog(commands.Cog):
             )
             return
 
-        config = self.service.get_config(guild.id)
-        if config is None:
+        configs = self.service.get_configs(guild.id)
+        if not configs:
             await interaction.response.send_message(
                 "설정된 자동 밴 채널이 없습니다.",
                 ephemeral=True,
             )
             return
 
+        if channel is None:
+            try:
+                cleared_configs = await self.service.clear_all_configs(guild.id)
+            except Exception:
+                logger.exception(
+                    "Failed to clear all ban channel configs",
+                    extra={"guild_id": guild.id},
+                )
+                await interaction.response.send_message(
+                    "설정을 해제하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                    ephemeral=True,
+                )
+                return
+
+            for config in cleared_configs:
+                await self._delete_warning_best_effort(guild, config)
+            cleared_channel_texts = [
+                self._channel_text(guild, config.channel_id)
+                for config in cleared_configs
+            ]
+            await interaction.response.send_message(
+                "다음 자동 밴 채널 설정을 해제했습니다:\n- "
+                + "\n- ".join(cleared_channel_texts),
+                ephemeral=True,
+            )
+            return
+
+        config = self.service.get_config(guild.id, channel.id)
+        if config is None:
+            await interaction.response.send_message(
+                f"{channel.mention}은(는) 자동 밴 채널로 설정되어 있지 않습니다.",
+                ephemeral=True,
+            )
+            return
+
         try:
-            await self.service.clear_config(guild.id)
+            await self.service.clear_config(guild.id, channel.id)
         except Exception:
             logger.exception(
                 "Failed to clear ban channel config",
@@ -191,7 +255,7 @@ class BanChannelCog(commands.Cog):
 
         await self._delete_warning_best_effort(guild, config)
         await interaction.response.send_message(
-            "자동 밴 채널 설정을 해제했습니다.",
+            f"자동 밴 채널에서 {channel.mention}을(를) 해제했습니다.",
             ephemeral=True,
         )
 
@@ -206,14 +270,27 @@ class BanChannelCog(commands.Cog):
             )
             return
 
-        config = self.service.get_config(guild.id)
-        if config is None:
+        configs = self.service.get_configs(guild.id)
+        if not configs:
             message = "설정된 자동 밴 채널이 없습니다."
         else:
-            channel = guild.get_channel(config.channel_id)
-            channel_text = channel.mention if channel is not None else f"삭제된 채널 (`{config.channel_id}`)"
-            message = f"현재 자동 밴 채널: {channel_text}"
+            channel_texts = [
+                self._channel_text(guild, config.channel_id) for config in configs
+            ]
+            message = (
+                f"현재 자동 밴 채널 ({len(configs)}/{MAX_BAN_CHANNELS_PER_GUILD}): "
+                + ", ".join(channel_texts)
+            )
         await interaction.response.send_message(message, ephemeral=True)
+
+    @staticmethod
+    def _channel_text(guild: discord.Guild, channel_id: int) -> str:
+        channel = guild.get_channel(channel_id)
+        return (
+            channel.mention
+            if channel is not None
+            else f"삭제된 채널 (`{channel_id}`)"
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

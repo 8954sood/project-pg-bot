@@ -10,28 +10,65 @@ class BanChannelDataSource:
     @staticmethod
     async def init_table() -> None:
         async with aiosqlite.connect(db_path) as db:
+            db.row_factory = aiosqlite.Row
             await db.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tbl_ban_channel (
-                    guild_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
                     channel_id INTEGER NOT NULL,
-                    warning_message_id INTEGER
+                    warning_message_id INTEGER,
+                    PRIMARY KEY (guild_id, channel_id)
                 )
                 """
             )
+
+            cursor = await db.execute("PRAGMA table_info(tbl_ban_channel)")
+            columns = await cursor.fetchall()
+            primary_key_columns = [
+                column["name"]
+                for column in sorted(columns, key=lambda column: column["pk"])
+                if column["pk"]
+            ]
+            if primary_key_columns == ["guild_id"]:
+                await db.execute(
+                    "ALTER TABLE tbl_ban_channel RENAME TO tbl_ban_channel_legacy"
+                )
+                await db.execute(
+                    """
+                    CREATE TABLE tbl_ban_channel (
+                        guild_id INTEGER NOT NULL,
+                        channel_id INTEGER NOT NULL,
+                        warning_message_id INTEGER,
+                        PRIMARY KEY (guild_id, channel_id)
+                    )
+                    """
+                )
+                await db.execute(
+                    """
+                    INSERT INTO tbl_ban_channel (
+                        guild_id, channel_id, warning_message_id
+                    )
+                    SELECT guild_id, channel_id, warning_message_id
+                    FROM tbl_ban_channel_legacy
+                    """
+                )
+                await db.execute("DROP TABLE tbl_ban_channel_legacy")
             await db.commit()
 
     @staticmethod
-    async def get(guild_id: int) -> Optional[BanChannelConfig]:
+    async def get(
+        guild_id: int,
+        channel_id: int,
+    ) -> Optional[BanChannelConfig]:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """
                 SELECT guild_id, channel_id, warning_message_id
                 FROM tbl_ban_channel
-                WHERE guild_id = ?
+                WHERE guild_id = ? AND channel_id = ?
                 """,
-                (guild_id,),
+                (guild_id, channel_id),
             )
             row = await cursor.fetchone()
             return BanChannelConfig(**row) if row else None
@@ -44,6 +81,7 @@ class BanChannelDataSource:
                 """
                 SELECT guild_id, channel_id, warning_message_id
                 FROM tbl_ban_channel
+                ORDER BY guild_id, channel_id
                 """
             )
             rows = await cursor.fetchall()
@@ -58,9 +96,8 @@ class BanChannelDataSource:
                     guild_id, channel_id, warning_message_id
                 )
                 VALUES (?, ?, ?)
-                ON CONFLICT(guild_id)
+                ON CONFLICT(guild_id, channel_id)
                 DO UPDATE SET
-                    channel_id = excluded.channel_id,
                     warning_message_id = excluded.warning_message_id
                 """,
                 (
@@ -72,7 +109,20 @@ class BanChannelDataSource:
             await db.commit()
 
     @staticmethod
-    async def delete(guild_id: int) -> bool:
+    async def delete(guild_id: int, channel_id: int) -> bool:
+        async with aiosqlite.connect(db_path) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM tbl_ban_channel
+                WHERE guild_id = ? AND channel_id = ?
+                """,
+                (guild_id, channel_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    @staticmethod
+    async def delete_all(guild_id: int) -> bool:
         async with aiosqlite.connect(db_path) as db:
             cursor = await db.execute(
                 "DELETE FROM tbl_ban_channel WHERE guild_id = ?",
