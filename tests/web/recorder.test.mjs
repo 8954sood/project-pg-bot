@@ -76,6 +76,40 @@ test("recording automatically stops at 30 seconds and ignores duplicate stops", 
   h.recorders[0].complete();
 });
 
+test("manual stop is blocked below three seconds and allowed at exactly three seconds", async () => {
+  const h = harness(); await h.recorder.start();
+  assert.equal(h.recorder.canStop, false);
+  h.recorder.stop();
+  h.tick(2.999); h.recorder.stop();
+  assert.equal(h.recorder.phase, "recording");
+  assert.equal(h.recorders[0].stopCalls, undefined);
+  h.tick(3);
+  assert.equal(h.recorder.canStop, true);
+  h.recorder.stop(); h.recorders[0].complete();
+  assert.equal(h.recorders[0].stopCalls, 1);
+  assert.equal(h.callbacks.data.length, 1);
+});
+
+test("an early device disconnect releases devices and rejects even a delayed stop callback", async () => {
+  const h = harness(); await h.recorder.start();
+  h.tick(1); h.tracks[0].ended();
+  assert.equal(h.recorder.phase, "stopping");
+  h.tick(5); h.recorders[0].complete();
+  assert.equal(h.recorder.phase, "idle");
+  assert.equal(h.callbacks.data.length, 0);
+  assert.match(h.callbacks.errors[0].message, /최소 3초/);
+  assert.equal(h.tracks[0].stopped, 1);
+  assert.equal(h.contexts[0].closed, 1);
+});
+
+test("an unexpected native stop below three seconds cannot produce a usable recording", async () => {
+  const h = harness(); await h.recorder.start();
+  h.tick(2); h.recorders[0].complete();
+  assert.equal(h.callbacks.data.length, 0);
+  assert.match(h.callbacks.errors[0].message, /최소 3초/);
+  assert.equal(h.tracks[0].stopped, 1);
+});
+
 test("cancelling a pending permission request stops the late microphone stream", async () => {
   const h = harness();
   let grant;
@@ -106,12 +140,12 @@ test("device disconnect stops recording, and recorder errors are reported after 
 
 test("a browser without optional MIME detection still records in its default format", async () => {
   const h = harness(); h.dependencies.Recorder.isTypeSupported = undefined;
-  await h.recorder.start(); h.recorder.stop(); h.recorders[0].complete();
+  await h.recorder.start(); h.tick(3); h.recorder.stop(); h.recorders[0].complete();
   assert.equal(h.callbacks.data[0].type, "audio/mp4");
 });
 
 test("empty recording reports an error and frees devices", async () => {
-  const h = harness(); await h.recorder.start(); h.recorder.stop(); h.recorders[0].onstop();
+  const h = harness(); await h.recorder.start(); h.tick(3); h.recorder.stop(); h.recorders[0].onstop();
   assert.equal(h.callbacks.data.length, 0); assert.equal(h.callbacks.errors.length, 1);
   assert.equal(h.tracks[0].stopped, 1);
 });
@@ -122,6 +156,6 @@ test("native browser timer methods keep their required window binding", async (t
   t.mock.method(globalThis, "clearInterval", function () { assert.equal(this, globalThis); checked++; });
   const h = harness();
   const recorder = new MicrophoneRecorder({}, { ...h.dependencies, setInterval: undefined, clearInterval: undefined });
-  await recorder.start(); recorder.stop(); h.recorders[0].complete();
+  await recorder.start(); h.tick(3); recorder.stop(); h.recorders[0].complete();
   assert.equal(checked, 2);
 });

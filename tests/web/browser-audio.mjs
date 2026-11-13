@@ -49,6 +49,8 @@ button.addEventListener("click", async () => {
       },
     }, { mediaDevices: { getUserMedia: async () => destination.stream } });
     await recorder.start();
+    recorder.stop();
+    if (recorder.phase !== "recording" || recorder.canStop) throw new Error("Recording stopped before the three-second minimum");
     if (recorder.phase === "recording") timer = setTimeout(() => recorder.stop(), 3600);
     watchdog = setTimeout(() => fail(new Error("Audio check timed out")), 12000);
   } catch (error) { await fail(error); }

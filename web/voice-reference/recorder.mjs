@@ -1,4 +1,4 @@
-import { MAX_RECORDING_SECONDS } from "./audio-utils.mjs";
+import { MIN_REFERENCE_SECONDS, MAX_RECORDING_SECONDS } from "./audio-utils.mjs";
 
 export const RECORDING_MIME_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4", "audio/webm"];
 
@@ -20,10 +20,15 @@ export class MicrophoneRecorder {
     this.callbacks.onState?.(phase);
   }
 
+  get canStop() {
+    return this.phase === "recording" && this.clock() - this.startedAt >= MIN_REFERENCE_SECONDS * 1000;
+  }
+
   async start() {
     if (this.phase !== "idle") return;
     const generation = ++this.generation;
     this.error = null;
+    this.stoppedAt = null;
     this.setPhase("requesting");
     try {
       if (!this.mediaDevices?.getUserMedia || !this.Recorder || !this.Context) {
@@ -49,18 +54,20 @@ export class MicrophoneRecorder {
       this.recorder.onerror = (event) => {
         if (generation !== this.generation) return;
         this.error = event.error ?? new Error("녹음 중 문제가 생겼어요. 다시 녹음해 주세요.");
-        this.stop();
+        this.stop({ force: true });
       };
       this.recorder.onstop = () => {
         if (generation !== this.generation) return;
         const type = recorder.mimeType || chunks[0]?.type || "audio/webm";
+        const duration = ((this.stoppedAt ?? this.clock()) - this.startedAt) / 1000;
         this.release();
         this.setPhase("idle");
         if (this.error) this.callbacks.onError?.(this.error);
         else if (!chunks.length) this.callbacks.onError?.(new Error("녹음된 소리가 없어요. 마이크를 확인하고 다시 녹음해 주세요."));
+        else if (duration < MIN_REFERENCE_SECONDS) this.callbacks.onError?.(new Error("녹음이 너무 일찍 끝났어요. 최소 3초 이상 다시 녹음해 주세요."));
         else this.callbacks.onData?.(new Blob(chunks, { type }));
       };
-      stream.getAudioTracks().forEach((track) => track.addEventListener("ended", () => this.stop(), { once: true }));
+      stream.getAudioTracks().forEach((track) => track.addEventListener("ended", () => this.stop({ force: true }), { once: true }));
       this.recorder.start(250);
       this.startedAt = this.clock();
       this.setPhase("recording");
@@ -80,8 +87,10 @@ export class MicrophoneRecorder {
     }
   }
 
-  stop() {
+  stop({ force = false } = {}) {
     if (this.phase !== "recording") return;
+    if (!force && !this.canStop) return;
+    this.stoppedAt = this.clock();
     this.setPhase("stopping");
     try { this.recorder.stop(); }
     catch (error) {
