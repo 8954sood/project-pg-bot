@@ -1,4 +1,4 @@
-# Optional, standalone TTS preprocessing utilities. No network use at conversion time.
+# Offline TTS preprocessing (also installed by the bot runtime).
 -c constraints.txt
 cmudict==1.1.3
 emoji==2.16.0

@@ -1,4 +1,4 @@
-"""Strict .pgvoice reader for future bot ingestion. No UI, extraction or DB I/O.
+"""Strict .pgvoice reader for bot ingestion. No UI, extraction or DB I/O.
 
 This validates a file format and integrity, not the identity of its producer.
 A public static site cannot keep a signing secret or prove where a file was made.

@@ -25,9 +25,10 @@ class FFmpegStdoutAudioSource(AudioSource):
 
     def read(self) -> bytes:
         try:
-            if self.proc.poll() is not None or not self.proc.stdout:
+            if not self.proc.stdout:
                 return b""
-            return self.proc.stdout.read(3840) or b""
+            data = self.proc.stdout.read(3840)
+            return data.ljust(3840, b"\0") if data else b""
         except Exception:
             logger.exception("ffmpeg stdout read failed")
             return b""
@@ -50,16 +51,6 @@ class FFmpegStdoutAudioSource(AudioSource):
                 logger.exception("AI TTS websocket feed task cancellation failed")
 
         try:
-            if self.proc.stdin:
-                self.proc.stdin.close()
-        except Exception:
-            logger.exception("ffmpeg stdin cleanup failed")
-        try:
-            if self.proc.stdout:
-                self.proc.stdout.close()
-        except Exception:
-            logger.exception("ffmpeg stdout cleanup failed")
-        try:
             if self.proc.poll() is None:
                 self.proc.terminate()
                 try:
@@ -69,3 +60,13 @@ class FFmpegStdoutAudioSource(AudioSource):
                     self.proc.wait(timeout=2)
         except Exception:
             logger.exception("ffmpeg process termination failed")
+        try:
+            if self.proc.stdin:
+                self.proc.stdin.close()
+        except Exception:
+            logger.exception("ffmpeg stdin cleanup failed")
+        try:
+            if self.proc.stdout:
+                self.proc.stdout.close()
+        except Exception:
+            logger.exception("ffmpeg stdout cleanup failed")

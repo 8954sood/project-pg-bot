@@ -4,6 +4,7 @@ from collections.abc import Callable, MutableMapping
 from typing import Optional
 
 from core.tts.models import TTSQueueModel, VoiceModel
+from core.tts.text_normalizer import EmptyTTSText
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,10 @@ class TTSPlayback:
                     )
                     if source is None:
                         raise RuntimeError("TTS source is missing")
+                except EmptyTTSText:
+                    voice_model["tts_queue"].pop(0)
+                    logger.debug("Skipping empty TTS input", extra={"guild_id": guild_id})
+                    continue
                 except Exception:
                     logger.exception(
                         "TTS source creation failed; skipping queue item",

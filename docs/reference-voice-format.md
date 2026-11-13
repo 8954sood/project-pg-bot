@@ -53,7 +53,7 @@ from core.tts.reference_voice import (
 voice = load_reference_voice("voice-reference.pgvoice")
 assert 3 <= voice.duration_seconds <= 10
 
-# 향후 Discord 첨부 파일 수신 측에서 파일명/바이트를 전달
+# Discord 첨부 파일 수신 측에서 파일명/바이트를 전달
 try:
     voice = parse_reference_voice(attachment_bytes, filename=attachment_filename)
 except ReferenceVoiceError as error:
@@ -65,7 +65,7 @@ else:
     prompt_lang = voice.prompt_lang
 ```
 
-위 코드는 사용 예시이며 Discord 수신 이벤트나 업로드 서비스는 이 변경에 포함하지 않습니다. 향후 봇은 `.pgvoice`만 수신하고 이 검증을 통과한 `ReferenceVoice`만 저장·처리하면 됩니다. 저장할 때는 Discord 사용자 ID 등에 기반해 서버가 정한 경로를 사용하세요. 패키지의 파일 경로를 추출하거나 저장 경로로 사용하지 않습니다.
+봇의 `/보이스등록`과 `/샘플보이스등록`은 `.pgvoice`만 수신하고 `SovitsService.register_package()`에서 이 검증을 통과한 `ReferenceVoice`를 처리합니다. 저장할 때는 Discord 사용자 ID 등에 기반해 서버가 정한 경로를 사용하세요. 패키지의 파일 경로를 추출하거나 저장 경로로 사용하지 않습니다.
 
 검증 항목:
 
@@ -100,3 +100,9 @@ reference_fields = {
 `.pgvoice` 확장자, `created_by` 식별자와 체크섬은 **형식·일관성·전송 손상을 검증하는 수단**입니다. GitHub Pages에서 실행되는 공개 JavaScript와 포맷은 누구나 재현할 수 있으므로, 이 검증만으로 실제 웹사이트에서 생성됐음을 인증할 수는 없습니다. 체크섬은 전자서명이 아니며, 대사와 음성이 실제로 일치함을 증명하지도 않습니다.
 
 따라서 현재의 수락 조건은 “Voice Studio 전용 포맷을 정확히 따르는 유효한 파일”입니다. 실제 사이트 경유를 강제해야 한다면 추후 인증된 서버 업로드 및 서버 서명 발급/검증이 필요합니다. 정적 웹 코드에 비밀키를 넣지 않습니다.
+
+## 현재 GPT-SoVITS 스트리밍 서버 연동
+
+현재 봇은 `/v1/styles`에 검증한 `voice.audio`를 multipart `audio`로, `voice.prompt_text`와 `voice.prompt_lang`을 각각 `prompt_text`, `prompt_lang`으로 전송합니다. 참조 대사에는 이모지/발음 전처리를 적용하지 않습니다. 현재 서버의 참조 대사 한도가 1,000자이므로 파일 형식상 유효한 1,001~2,000자 대사는 등록 단계에서 거절합니다.
+
+서버가 반환한 스타일 ID와 소유자·언어·공개 여부는 봇 DB에 보관합니다. 합성은 `/v1/tts/stream`에 해당 ID와 전처리한 문장, 음성의 언어를 보내며 WAV 경로를 직접 지정하지 않습니다. 서버에 WAV를 업로드하고 캐시하는 작업부터 삭제·합성까지 동일한 직렬화 잠금을 사용합니다.

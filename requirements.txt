@@ -1,4 +1,5 @@
 -c constraints.txt
+-r requirements-pronunciation.txt
 aiosqlite==0.22.1
 discord.py[voice]==2.7.1
 gTTS==2.5.4
