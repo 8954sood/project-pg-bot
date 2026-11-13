@@ -6,6 +6,20 @@ EMOJI_TEXT = "이모지"
 CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:[^:\s>]+:\d+>")
 
 
+class EmptyTTSText(ValueError):
+    """Preprocessing left no content to synthesize."""
+
+
+def build_tts_input(content: str, has_image: bool) -> str:
+    """Queue original text so the selected engine can prepare its language.
+
+    Remove custom emoji before the queue's empty/length checks. Keep sentence
+    punctuation and Unicode emoji until the engine's target language is known.
+    """
+    text = CUSTOM_EMOJI_PATTERN.sub(" ", content or "").strip()
+    return f"{IMAGE_TEXT}{text}" if has_image else text
+
+
 def normalize_tts_text(content: str) -> str:
     text = CUSTOM_EMOJI_PATTERN.sub(EMOJI_TEXT, content)
     stripped = text.strip()

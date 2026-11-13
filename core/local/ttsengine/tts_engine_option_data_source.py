@@ -30,7 +30,7 @@ class TTSEngineOptionDataSource:
 
     @staticmethod
     async def upsert(user_id: int, engine: str, model_name: Optional[str]) -> None:
-        if engine not in ("gtts", "ai"):
+        if engine not in ("gtts", "ai", "sovits"):
             raise ValueError("Invalid engine")
 
         async with aiosqlite.connect(db_path) as db:

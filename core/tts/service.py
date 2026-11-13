@@ -9,12 +9,13 @@ import discord
 from core.local import LocalCore
 from core.local.ttsengine.dto import TTSEngineOption
 from core.tts.engine_selector import TTSEngineSelector
+from core.tts.sovits import SovitsService
 from core.tts.engines.ai_stream_engine import AIStreamEngine
 from core.tts.engines.gtts_engine import GTTSEngine
 from core.tts.models import TTSQueueModel, VoiceModel
 from core.tts.playback import TTSPlayback
 from core.tts.queue import enqueue_tts
-from core.tts.text_normalizer import build_tts_text
+from core.tts.text_normalizer import EmptyTTSText, build_tts_input, normalize_tts_text
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ async def create_tts_source_with_dependencies(
     ai_engine,
     gtts_engine,
     gtts_timeout: float,
+    sovits_engine=None,
 ) -> Tuple[discord.AudioSource, str]:
     user_id = queue_item["user_id"]
     text = queue_item["text"]
@@ -49,11 +51,21 @@ async def create_tts_source_with_dependencies(
         },
     )
 
+    if selection.engine == "sovits" and sovits_engine and selection.model_name:
+        try:
+            source = await sovits_engine.create_discord_source(
+                text=text, model_name=selection.model_name, user_id=user_id)
+            return source, "sovits"
+        except EmptyTTSText:
+            raise
+        except Exception:
+            logger.exception("GPT-SoVITS failed; falling back to gTTS")
+
     if selection.engine == "ai":
         if ai_engine and selection.model_name:
             try:
                 source = await ai_engine.create_discord_source(
-                    text=text,
+                    text=normalize_tts_text(text),
                     model_name=selection.model_name,
                 )
                 if source is None:
@@ -111,10 +123,12 @@ async def create_tts_source_with_dependencies(
                 "user_id": user_id,
                 "tts_engine": "gtts",
                 "ai_model": selection.model_name,
-                "fallback": selection.engine == "ai",
+                "fallback": selection.engine in ("ai", "sovits"),
             },
         )
         return source, "gtts"
+    except EmptyTTSText:
+        raise
     except asyncio.TimeoutError as exc:
         logger.error(
             "gTTS source creation timed out",
@@ -122,7 +136,7 @@ async def create_tts_source_with_dependencies(
                 "guild_id": guild_id,
                 "user_id": user_id,
                 "tts_engine": "gtts",
-                "fallback": selection.engine == "ai",
+                "fallback": selection.engine in ("ai", "sovits"),
             },
         )
         raise RuntimeError("gTTS source creation timed out") from exc
@@ -133,7 +147,7 @@ async def create_tts_source_with_dependencies(
                 "guild_id": guild_id,
                 "user_id": user_id,
                 "tts_engine": "gtts",
-                "fallback": selection.engine == "ai",
+                "fallback": selection.engine in ("ai", "sovits"),
             },
         )
         raise RuntimeError("All TTS engines failed") from exc
@@ -151,6 +165,10 @@ class TTSService:
         self.tts_engine_option: dict[int, TTSEngineOption] = {}
         self.tts_engine_allow: set[int] = set()
 
+        self.voice_studio_url = os.getenv(
+            "VOICE_STUDIO_URL", "https://8954sood.github.io/project-pg-bot/",
+        )
+        self.sovits = SovitsService(os.getenv("GPT_SOVITS_URL", ""))
         self.gtts_engine = GTTSEngine(lambda user_id: self.voice_option.get(user_id, "ko"))
         self.ai_ws_url = os.environ.get("AI_TTS_WS_URL", "")
         self.ai_engine = AIStreamEngine(ai_ws_url=self.ai_ws_url) if self.ai_ws_url else None
@@ -244,10 +262,11 @@ class TTSService:
             ai_engine=self.ai_engine,
             gtts_engine=self.gtts_engine,
             gtts_timeout=self.gtts_timeout,
+            sovits_engine=self.sovits,
         )
 
     def build_tts_text(self, content: str, has_image: bool) -> str:
-        return build_tts_text(content, has_image)
+        return build_tts_input(content, has_image)
 
     async def clear_guild_queue(self, guild_id: int, *, reason: str = "unknown") -> None:
         await self.playback.clear_guild_queue(
@@ -280,7 +299,7 @@ class TTSService:
         engine: str,
         model_name: str | None,
     ) -> None:
-        model_to_save = model_name if engine == "ai" else None
+        model_to_save = model_name if engine in ("ai", "sovits") else None
         await LocalCore.ttsEngineOptionDataSource.upsert(user_id, engine, model_to_save)
         self.tts_engine_option[user_id] = TTSEngineOption(
             user_id=user_id,
