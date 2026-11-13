@@ -27,8 +27,15 @@ class FFmpegStdoutAudioSource(AudioSource):
         try:
             if not self.proc.stdout:
                 return b""
-            data = self.proc.stdout.read(3840)
-            return data.ljust(3840, b"\0") if data else b""
+            frame = bytearray()
+            while len(frame) < 3840:
+                data = self.proc.stdout.read(3840 - len(frame))
+                if not data:
+                    break
+                frame.extend(data)
+            # A pipe may return a short read before EOF. Pad only the final
+            # frame, otherwise each partial read inserts silence into speech.
+            return bytes(frame).ljust(3840, b"\0") if frame else b""
         except Exception:
             logger.exception("ffmpeg stdout read failed")
             return b""

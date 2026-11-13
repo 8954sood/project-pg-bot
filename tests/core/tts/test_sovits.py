@@ -272,18 +272,30 @@ async def test_streams_share_one_lock_and_send_prepared_text(voice_server, monke
 
 
 @pytest.mark.asyncio
-async def test_server_pcm_is_audible_before_eof_and_kept_sample_exact(voice_server):
+@pytest.mark.parametrize('sample_rate', [32000, 48000])
+async def test_server_pcm_is_audible_before_eof_and_kept_sample_exact(voice_server, sample_rate):
     import math
+    import shutil
     import struct
+    import subprocess
+
+    if sample_rate != 48000 and not shutil.which('ffmpeg'):
+        pytest.skip('Native32 streaming conversion requires ffmpeg')
 
     app = web.Application()
     finish = asyncio.Event()
-    mono = b''.join(struct.pack('<h', int(10000 * math.sin(2 * math.pi * 440 * i / 48000))) for i in range(2400))
-    expected = b''.join(mono[i:i + 2] * 2 for i in range(0, len(mono), 2))
+    mono = b''.join(struct.pack('<h', int(10000 * math.sin(2 * math.pi * 440 * i / sample_rate)))
+                    for i in range(sample_rate // 10))
+    converted = mono if sample_rate == 48000 else subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 's16le',
+        '-ar', str(sample_rate), '-ac', '1', '-i', 'pipe:0',
+        '-f', 's16le', '-ar', '48000', '-ac', '1', 'pipe:1',
+    ], input=mono, stdout=subprocess.PIPE, check=True).stdout
+    expected = b''.join(converted[i:i + 2] * 2 for i in range(0, len(converted), 2))
 
     async def stream(request):
         response = web.StreamResponse(headers={
-            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1',
+            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': str(sample_rate), 'X-Audio-Channels': '1',
         })
         await response.prepare(request)
         for start in range(0, len(mono), 137):  # Odd transport boundaries split samples.
@@ -301,9 +313,11 @@ async def test_server_pcm_is_audible_before_eof_and_kept_sample_exact(voice_serv
         assert any(frames[0])
         assert b''.join(frames) == expected[:7680]
         finish.set()
-        frames.append(await asyncio.wait_for(asyncio.to_thread(source.read), 1))
+        await asyncio.wait_for(source.feed_task, 2)
+        while frame := await asyncio.wait_for(asyncio.to_thread(source.read), 1):
+            frames.append(frame)
         assert all(len(frame) == 3840 for frame in frames)
-        assert b''.join(frames) == expected + b'\0' * (3 * 3840 - len(expected))
+        assert b''.join(frames) == expected.ljust(((len(expected) + 3839) // 3840) * 3840, b'\0')
         assert await asyncio.wait_for(asyncio.to_thread(source.read), 1) == b''
         await source.feed_task
         assert not service.lock.locked()
@@ -346,13 +360,14 @@ async def test_deletion_picker_excludes_other_users_and_owner_sees_samples(voice
 
 
 @pytest.mark.asyncio
-async def test_stopping_playback_closes_stream_and_unblocks_the_next_request(voice_server):
+@pytest.mark.parametrize('sample_rate', [32000, 48000])
+async def test_stopping_playback_closes_stream_and_unblocks_the_next_request(voice_server, sample_rate):
     app = web.Application()
     finish = asyncio.Event()
 
     async def stream(request):
         response = web.StreamResponse(headers={
-            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1',
+            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': str(sample_rate), 'X-Audio-Channels': '1',
         })
         await response.prepare(request)
         await response.write(b'\x01\0' * 48000)

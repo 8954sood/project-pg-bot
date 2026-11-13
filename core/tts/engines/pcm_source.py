@@ -5,6 +5,56 @@ import threading
 from discord import AudioSource
 
 
+async def write_pcm_stream(source, chunks, sample_rate):
+    """Feed native PCM into the bounded 48kHz playback source."""
+    if sample_rate == 48000:
+        async for chunk in chunks:
+            if not await asyncio.to_thread(source.write, chunk):
+                break
+        return
+
+    # Keep the existing high-quality native32 conversion on the bot side.
+    # The inference server continues to stream its unchanged model output.
+    proc = await asyncio.create_subprocess_exec(
+        'ffmpeg', '-hide_banner', '-loglevel', 'error',
+        '-f', 's16le', '-ar', str(sample_rate), '-ac', '1',
+        '-probesize', '32', '-analyzeduration', '0', '-i', 'pipe:0',
+        '-f', 's16le', '-ar', '48000', '-ac', '1', 'pipe:1',
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, limit=16384,
+    )
+
+    async def write_input():
+        try:
+            async for chunk in chunks:
+                proc.stdin.write(chunk)
+                await proc.stdin.drain()
+        finally:
+            proc.stdin.close()
+
+    writer = asyncio.create_task(write_input())
+    try:
+        while chunk := await proc.stdout.read(8192):
+            if not await asyncio.to_thread(source.write, chunk):
+                return
+        status = await proc.wait()
+        if status:
+            raise RuntimeError(f'PCM resampling failed (ffmpeg exit {status})')
+        await writer
+    finally:
+        writer.cancel()
+        if proc.returncode is None:
+            try:
+                # Playback was cancelled: do not block trying to flush audio
+                # into a pipe whose consumer has already stopped reading.
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        await asyncio.gather(writer, return_exceptions=True)
+        await proc.stdout.read()
+        await proc.wait()
+
+
 class PCMStreamAudioSource(AudioSource):
     MONO_FRAME_BYTES = 1920  # 960 signed PCM16 samples, 20 ms at 48 kHz
     BUFFER_BYTES = MONO_FRAME_BYTES * 8

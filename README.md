@@ -12,7 +12,9 @@ python -m pip check
 pytest
 ```
 
-주요 갱신은 Pillow 13.0.0, python-dotenv 1.2.4, websockets 17.4, pytest 9.2.0, pytest-asyncio 1.5.0, aiohttp 3.14.5, davey 0.2.0입니다. discord.py 2.7.1, aiosqlite 0.22.1, gTTS 2.5.4와 발음 전처리 패키지는 이미 최신 버전이라 유지했습니다. discord.py의 `PyNaCl < 1.6`, gTTS의 `click < 8.2` 조건 때문에 두 의존성은 각각 1.5.0과 8.1.8로 유지합니다. Python 3.10 지원 종료는 [websockets 17 변경 사항](https://websockets.readthedocs.io/en/stable/project/changelog.html)과 [Pillow 13 변경 사항](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html#python-3-10)을 참고하세요.
+주요 갱신은 Pillow 13.0.0, python-dotenv 1.2.4, websockets 17.4, pytest 9.2.0, pytest-asyncio 1.5.0, aiohttp 3.14.5입니다. discord.py 2.7.1, aiosqlite 0.22.1, gTTS 2.5.4와 발음 전처리 패키지는 유지했습니다. discord.py의 `PyNaCl < 1.6`, gTTS의 `click < 8.2` 조건 때문에 두 의존성은 각각 1.5.0과 8.1.8로 유지합니다. Python 3.10 지원 종료는 [websockets 17 변경 사항](https://websockets.readthedocs.io/en/stable/project/changelog.html)과 [Pillow 13 변경 사항](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html#python-3-10)을 참고하세요.
+
+Discord 음성 암호화 패키지는 **davey 0.1.7**로 고정합니다. discord.py 2.7.1은 davey 0.2.0에서 필수가 된 키 전환 호출을 사용하지 않아, 음성을 생성하고 발화 표시가 켜져도 수신자가 듣지 못할 수 있습니다. [davey 0.2.0 마이그레이션 안내](https://github.com/Snazzah/davey/wiki/Migrating-to-0.2.0)의 `prepare_transition` / `execute_transition` 변경을 지원하는 discord.py 버전으로 함께 갱신하기 전까지 이 고정을 유지하세요.
 
 `Deprecated`는 Python 3.12 이상에서 3.0.1, Python 3.11에서는 해당 Python을 지원하는 최신 버전인 1.3.1을 사용하도록 환경 마커로 분리했습니다.
 
@@ -207,3 +209,8 @@ if text.strip():
 `VOICE_STUDIO_URL`로 녹음 안내 링크를 바꿀 수 있습니다. 기본값은 `https://8954sood.github.io/project-pg-bot/`입니다. `TTS_PRONUNCIATION_DICTIONARY`에 `examples/tts_pronunciation.json` 형식의 사전 경로를 지정하면 GPT-SoVITS 발음 표기를 보정합니다. 발음 변환 인스턴스와 구간 캐시를 재사용하고, 사전 로드와 변환은 합성 요청 처리 시 별도 스레드에서 실행합니다. 필요한 이모지/발음 패키지는 `requirements.txt`에 포함되어 있습니다.
 
 GPT-SoVITS 오디오는 서버의 **48 kHz / mono / s16le PCM**을 직접 수신합니다. 이 경로에는 FFmpeg나 리샘플링이 없으며, Discord가 요구하는 20ms·48 kHz·스테레오 프레임에 맞춰 채널만 복제합니다. 전송 경계에서 잘린 PCM 샘플과 프레임을 이어 붙이고 마지막 프레임에만 무음을 채웁니다. 다음 문장 합성을 기다리는 동안에는 부분 샘플을 보존한 채 무음 프레임을 보내 Discord가 뒤늦게 음성 패킷을 몰아서 전송하지 않도록 합니다. 첫 재생 프레임이 준비된 뒤 Discord 재생을 시작하며, 버퍼는 8프레임(160ms)으로 제한해 HTTP 수신에 역압을 적용합니다. 재생 중단 시 버퍼 대기와 HTTP 연결을 종료하고 공통 잠금을 반환합니다. gTTS의 MP3 재생에는 기존 FFmpeg를 사용합니다.
+
+AR17+C24처럼 서버가 **32 kHz / mono / s16le**를 반환하면 응답 헤더를 읽어
+봇의 FFmpeg에서 48 kHz 모노로 변환한 뒤 같은 PCM 재생 큐에 전달합니다.
+서버는 모델 원래 출력으로 계속 스트리밍하며, 봇은 응답 종료 전부터 변환·재생합니다.
+이 경우 변환기 파이프에도 역압을 적용하고 재생 중단 시 자식 프로세스를 정리합니다.

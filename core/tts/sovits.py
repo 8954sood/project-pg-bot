@@ -7,7 +7,7 @@ import re
 import aiohttp
 
 from core.local.tts.voice_store import VoiceStore
-from core.tts.engines.pcm_source import PCMStreamAudioSource
+from core.tts.engines.pcm_source import PCMStreamAudioSource, write_pcm_stream
 from core.tts.emoji_normalizer import normalize_tts_emojis
 from core.tts.language import validate_language
 from core.tts.pronunciation import PronunciationPreprocessor
@@ -160,19 +160,18 @@ class SovitsService:
                 'style_id': model_name, 'text': text, 'lang': voice['lang']})
             expected = {
                 'X-Audio-Format': 's16le',
-                'X-Audio-Sample-Rate': '48000',
                 'X-Audio-Channels': '1',
             }
-            if any(response.headers.get(key) != value for key, value in expected.items()):
+            rate = response.headers.get('X-Audio-Sample-Rate')
+            if (any(response.headers.get(key) != value for key, value in expected.items())
+                    or rate not in ('32000', '48000')):
                 raise RuntimeError('음성 서버의 PCM 오디오 형식이 올바르지 않습니다.')
             source = PCMStreamAudioSource(asyncio.get_running_loop())
 
             async def feed():
                 error = None
                 try:
-                    async for chunk in response.content.iter_chunked(8192):
-                        if not await asyncio.to_thread(source.write, chunk):
-                            break
+                    await write_pcm_stream(source, response.content.iter_chunked(8192), int(rate))
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -193,6 +192,7 @@ class SovitsService:
             logger.info('GPT-SoVITS PCM playback ready', extra={
                 'user_id': user_id, 'style_id': model_name,
                 'audio_format': 's16le', 'sample_rate': 48000,
+                'input_sample_rate': int(rate),
             })
             return source
         except BaseException:

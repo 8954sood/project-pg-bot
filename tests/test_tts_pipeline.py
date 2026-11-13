@@ -374,6 +374,32 @@ def test_ffmpeg_source_cleanup_is_idempotent():
     proc.stdout.close.assert_called_once()
 
 
+def test_ffmpeg_pipe_fragments_do_not_insert_silence_between_frames():
+    from collections import deque
+
+    pcm = bytes(range(1, 256)) * 33
+    chunks = deque([pcm[:13], pcm[13:2000], pcm[2000:4100], pcm[4100:]])
+
+    def read(size):
+        if not chunks:
+            return b''
+        chunk = chunks.popleft()
+        if len(chunk) > size:
+            chunks.appendleft(chunk[size:])
+        return chunk[:size]
+
+    proc = Mock()
+    proc.poll.return_value = 0
+    proc.stdout.read.side_effect = read
+    source = FFmpegStdoutAudioSource(proc)
+    frames = []
+    while frame := source.read():
+        frames.append(frame)
+    assert len(frames) == 3
+    assert b''.join(frames) == pcm.ljust(3 * 3840, b'\0')
+    source.cleanup()
+
+
 def test_gtts_engine_passes_network_timeout(monkeypatch):
     created = {}
     fake_tts = SimpleNamespace(write_to_fp=lambda fp: fp.write(b"mp3"))
