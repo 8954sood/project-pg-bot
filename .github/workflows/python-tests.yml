@@ -1,0 +1,50 @@
+name: Python dependencies and tests
+
+on:
+  push:
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - 'constraints.txt'
+      - 'pytest.ini'
+      - 'web/voice-reference/**'
+      - '.github/workflows/python-tests.yml'
+  pull_request:
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - 'constraints.txt'
+      - 'pytest.ini'
+      - 'web/voice-reference/**'
+      - '.github/workflows/python-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements*.txt
+            constraints.txt
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install compatible dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -r requirements-dev.txt
+          .venv/bin/python -m pip check
+      - name: Test without live Discord or LLM connections
+        run: .venv/bin/python -m pytest -q

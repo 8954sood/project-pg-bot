@@ -1,4 +1,5 @@
 # Optional, standalone TTS pronunciation utility. No network use at conversion time.
+-c constraints.txt
 cmudict==1.1.3
 koroman==1.0.16
 pykakasi==2.3.0

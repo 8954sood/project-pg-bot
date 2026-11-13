@@ -39,6 +39,22 @@ class PronunciationResult:
         return not self.unresolved
 
 
+@dataclass(frozen=True, slots=True)
+class ReferenceVoice:
+    """Validated audio and prompt loaded from a .pgvoice package."""
+
+    audio: bytes = field(repr=False)
+    prompt_text: str
+    prompt_lang: TTSLanguage
+    sample_count: int
+    audio_sha256: str
+    sample_rate: int = 32000
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.sample_count / self.sample_rate
+
+
 @dataclass(slots=True)
 class TTSQueueItem:
     text: str
@@ -71,5 +87,5 @@ class VoiceModel(TypedDict):
 
 __all__ = [
     "GuildTTSState", "TTSQueueItem", "TTSQueueModel", "VoiceModel",
-    "TTSLanguage", "LanguageProfile", "PronunciationResult",
+    "TTSLanguage", "LanguageProfile", "PronunciationResult", "ReferenceVoice",
 ]
