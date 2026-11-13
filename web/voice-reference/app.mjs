@@ -78,6 +78,7 @@ function updateControls() {
   for (const id of ["prompt-language", "prompt-preset", "transcript"]) ui[id].disabled = occupied;
   for (const id of ["start-time", "end-time", "start-range", "end-range", "play-button", "trim-silence"]) ui[id].disabled = occupied || !state.buffer;
   ui["wave-panel"].classList.toggle("recording", recording);
+  ui["wave-panel"].classList.toggle("has-audio", Boolean(state.buffer) && !recording);
   ui["wave-empty"].hidden = Boolean(state.buffer) || recording;
   ui.editor.hidden = !state.buffer;
   const duration = state.buffer ? selection().duration : 0;
