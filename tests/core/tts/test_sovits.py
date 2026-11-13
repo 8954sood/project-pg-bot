@@ -93,25 +93,29 @@ async def test_registration_is_serialized_and_retries_busy(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_korean_engine_command_checks_voice_access():
+async def test_korean_engine_command_opens_picker_without_id_input():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
     from ui.tts.cog import TTS
+    from ui.tts.views import VoicePickerView
 
+    voice = dict(style_id='voice', name='내 음성', owner_id=1, public=False, is_sample=False, lang='ko')
     service = SimpleNamespace(
-        sovits=SimpleNamespace(configured=lambda: True, visible=AsyncMock(return_value=[{'style_id': 'voice'}])),
+        sovits=SimpleNamespace(visible=AsyncMock(return_value=[voice])),
         set_tts_engine_option=AsyncMock(),
     )
-    cog = SimpleNamespace(service=service)
-    ctx = SimpleNamespace(user=SimpleNamespace(id=1), response=SimpleNamespace(send_message=AsyncMock()))
-    choice = SimpleNamespace(value='sovits')
-    await TTS.change_engine.callback(cog, ctx, choice, 'private')
+    cog = SimpleNamespace(service=service, bot=SimpleNamespace())
+    ctx = SimpleNamespace(
+        user=SimpleNamespace(id=1),
+        response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+    await TTS.change_engine.callback(cog, ctx, SimpleNamespace(value='sovits'))
     service.set_tts_engine_option.assert_not_awaited()
-    await TTS.change_engine.callback(cog, ctx, choice, 'voice')
-    service.set_tts_engine_option.assert_awaited_once_with(user_id=1, engine='sovits', model_name='voice')
+    assert isinstance(ctx.followup.send.call_args.kwargs['view'], VoicePickerView)
     await TTS.change_engine.callback(cog, ctx, SimpleNamespace(value='gtts'))
-    service.set_tts_engine_option.assert_awaited_with(user_id=1, engine='gtts', model_name=None)
+    service.set_tts_engine_option.assert_awaited_once_with(user_id=1, engine='gtts', model_name=None)
 
 
 @pytest_asyncio.fixture
@@ -229,19 +233,17 @@ async def test_sovits_prepares_emoji_and_pronunciation_in_target_language():
 
 @pytest.mark.asyncio
 async def test_streams_share_one_lock_and_send_prepared_text(voice_server, monkeypatch):
-    import io
-    from types import SimpleNamespace
-    from unittest.mock import Mock
-
     app = web.Application()
     finish = asyncio.Event()
     requests = []
 
     async def stream(request):
         requests.append(await request.json())
-        response = web.StreamResponse()
+        response = web.StreamResponse(headers={
+            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1',
+        })
         await response.prepare(request)
-        await response.write(b'\0' * 960)
+        await response.write(b'\0' * 1920)
         await finish.wait()
         await response.write_eof()
         return response
@@ -249,15 +251,6 @@ async def test_streams_share_one_lock_and_send_prepared_text(voice_server, monke
     app.router.add_post('/v1/tts/stream', stream)
     service = SovitsService(await voice_server(app))
     await VoiceStore.add('a' * 32, 1, '한국어', True, False, 'ko')
-    processes = []
-
-    def process(*args, **kwargs):
-        proc = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO(),
-                               poll=lambda: 0, terminate=Mock(), wait=Mock())
-        processes.append(proc)
-        return proc
-
-    monkeypatch.setattr('core.tts.sovits.subprocess.Popen', process)
     source = await service.create_discord_source(text='test ❤️!', model_name='a' * 32, user_id=1)
     second = asyncio.create_task(service.create_discord_source(text='안녕?', model_name='a' * 32, user_id=2))
     try:
@@ -275,4 +268,109 @@ async def test_streams_share_one_lock_and_send_prepared_text(voice_server, monke
         finish.set()
         second.cancel()
         await asyncio.gather(second, return_exceptions=True)
+        source.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_server_pcm_is_audible_before_eof_and_kept_sample_exact(voice_server):
+    import math
+    import struct
+
+    app = web.Application()
+    finish = asyncio.Event()
+    mono = b''.join(struct.pack('<h', int(10000 * math.sin(2 * math.pi * 440 * i / 48000))) for i in range(2400))
+    expected = b''.join(mono[i:i + 2] * 2 for i in range(0, len(mono), 2))
+
+    async def stream(request):
+        response = web.StreamResponse(headers={
+            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1',
+        })
+        await response.prepare(request)
+        for start in range(0, len(mono), 137):  # Odd transport boundaries split samples.
+            await response.write(mono[start:start + 137])
+        await finish.wait()
+        return response
+
+    app.router.add_post('/v1/tts/stream', stream)
+    service = SovitsService(await voice_server(app))
+    await VoiceStore.add('a' * 32, 1, '음성', False, False, 'ko')
+    source = await asyncio.wait_for(service.create_discord_source(text='안녕', model_name='a' * 32, user_id=1), 2)
+    try:
+        frames = [await asyncio.wait_for(asyncio.to_thread(source.read), 1) for _ in range(2)]
+        assert not finish.is_set()
+        assert any(frames[0])
+        assert b''.join(frames) == expected[:7680]
+        finish.set()
+        frames.append(await asyncio.wait_for(asyncio.to_thread(source.read), 1))
+        assert all(len(frame) == 3840 for frame in frames)
+        assert b''.join(frames) == expected + b'\0' * (3 * 3840 - len(expected))
+        assert await asyncio.wait_for(asyncio.to_thread(source.read), 1) == b''
+        await source.feed_task
+        assert not service.lock.locked()
+    finally:
+        finish.set()
+        source.cleanup()
+        await asyncio.gather(source.feed_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_wrong_server_audio_format_and_empty_stream_release_lock(voice_server):
+    app = web.Application()
+    use_valid_headers = False
+
+    async def stream(request):
+        headers = {'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1'} if use_valid_headers else {}
+        return web.Response(body=b'', headers=headers)
+
+    app.router.add_post('/v1/tts/stream', stream)
+    service = SovitsService(await voice_server(app))
+    await VoiceStore.add('a' * 32, 1, '음성', False, False, 'ko')
+    with pytest.raises(RuntimeError, match='형식'):
+        await service.create_discord_source(text='안녕', model_name='a' * 32, user_id=1)
+    assert not service.lock.locked()
+    use_valid_headers = True
+    with pytest.raises(RuntimeError, match='빈 오디오'):
+        await service.create_discord_source(text='안녕', model_name='a' * 32, user_id=1)
+    assert not service.lock.locked()
+
+
+@pytest.mark.asyncio
+async def test_deletion_picker_excludes_other_users_and_owner_sees_samples(voice_server):
+    await VoiceStore.add('a' * 32, 1, '내 음성', False, False, 'ko')
+    await VoiceStore.add('b' * 32, 2, '남의 공개 음성', True, False, 'ko')
+    await VoiceStore.add('c' * 32, 99, '공개 샘플', True, True, 'ja')
+    service = SovitsService('')
+    assert {voice['style_id'] for voice in await service.deletable(1)} == {'a' * 32}
+    assert {voice['style_id'] for voice in await service.deletable(1, owner=True)} == {'a' * 32, 'c' * 32}
+    assert await service.deletable(3) == []
+
+
+@pytest.mark.asyncio
+async def test_stopping_playback_closes_stream_and_unblocks_the_next_request(voice_server):
+    app = web.Application()
+    finish = asyncio.Event()
+
+    async def stream(request):
+        response = web.StreamResponse(headers={
+            'X-Audio-Format': 's16le', 'X-Audio-Sample-Rate': '48000', 'X-Audio-Channels': '1',
+        })
+        await response.prepare(request)
+        await response.write(b'\x01\0' * 48000)
+        await finish.wait()
+        return response
+
+    app.router.add_post('/v1/tts/stream', stream)
+    service = SovitsService(await voice_server(app))
+    await VoiceStore.add('a' * 32, 1, '음성', False, False, 'ko')
+    source = await asyncio.wait_for(service.create_discord_source(text='안녕', model_name='a' * 32, user_id=1), 2)
+    try:
+        await asyncio.sleep(0.02)
+        assert service.lock.locked()
+        assert len(source._buffer) <= source.BUFFER_BYTES
+        source.cleanup()
+        await asyncio.wait_for(asyncio.gather(source.feed_task, return_exceptions=True), 1)
+        assert not service.lock.locked()
+        assert source.read() == b''
+    finally:
+        finish.set()
         source.cleanup()
