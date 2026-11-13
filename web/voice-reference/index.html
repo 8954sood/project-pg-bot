@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f6f3">
+  <meta name="description" content="브라우저에서 목소리를 녹음하고 필요한 부분만 잘라 TTS 참조 음성으로 저장하세요. 음성은 서버에 전송되지 않습니다.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>Voice Studio · 내 목소리 준비하기</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./app.mjs" type="module"></script>
+</head>
+<body>
+  <a class="skip-link" href="#studio">녹음 도구로 바로 가기</a>
+  <header class="site-header wrap">
+    <a class="brand" href="./" aria-label="Voice Studio 홈"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>voice<span class="brand-light">studio</span><span class="beta">BETA</span></a>
+    <span class="privacy-pill"><span class="status-dot"></span>내 브라우저에서만 안전하게</span>
+  </header>
+
+  <main class="wrap">
+    <section class="intro" aria-labelledby="page-title">
+      <div><p class="eyebrow">A LITTLE RECORDING. YOUR OWN VOICE.</p><h1 id="page-title">이야기의 시작은,<br><span>내 목소리로.</span></h1><p class="intro-copy">편안하게 읽고, 필요한 부분만 남겨 주세요.<br>나만의 TTS 참조 음성이 완성돼요.</p></div>
+      <div class="intro-note"><span class="note-icon" aria-hidden="true">↗</span><p>어렵게 준비할 필요 없어요.<br><strong>조용한 곳, 평소 말투면 충분해요.</strong></p></div>
+    </section>
+
+    <ol class="steps" aria-label="참조 음성 만들기">
+      <li id="step-record" aria-current="step"><span>01</span>목소리 담기</li><li id="step-trim"><span>02</span>필요한 만큼 다듬기</li><li id="step-export"><span>03</span>내 목소리 저장</li>
+    </ol>
+
+    <div class="studio-grid" id="studio">
+      <section class="record-card card" aria-labelledby="record-title">
+        <div class="card-heading"><div><p class="section-kicker">YOUR RECORDING</p><h2 id="record-title">목소리를 들려주세요</h2></div><span class="format-pill">참조 구간 3–10초</span></div>
+        <div class="wave-panel" id="wave-panel">
+          <div class="wave-topline"><span id="source-label"><span class="tiny-dot"></span>READY WHEN YOU ARE</span><span id="source-duration">최대 30초 녹음</span></div>
+          <canvas id="waveform" aria-label="녹음 파형. 구간은 아래 시작과 끝 슬라이더로 조절할 수 있어요." role="img"></canvas>
+          <div id="wave-empty" class="wave-empty"><span class="mic-orbit" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="8" y="3" width="8" height="12" rx="4"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/></svg></span><p id="wave-message">당신의 목소리를 기다리고 있어요</p></div>
+          <div class="wave-bottomline"><span id="wave-hint">편안한 목소리로 읽어 주세요</span><span id="record-clock">00:00.0</span></div>
+        </div>
+
+        <div class="record-actions"><button class="record-button" id="record-button" type="button"><span class="record-symbol" aria-hidden="true"></span><span id="record-button-label">녹음 시작</span></button><span class="or">또는</span><button class="upload-button" id="upload-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 15v5h14v-5"/></svg>음성 파일 가져오기</button><input id="file-input" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm,.flac" hidden></div>
+        <p class="record-footnote" id="record-footnote">마이크 권한은 녹음을 시작할 때만 요청해요.</p>
+        <p class="notice" id="notice" role="status" aria-live="polite" hidden></p>
+
+        <section class="editor" id="editor" aria-labelledby="edit-title" hidden>
+          <div class="editor-heading"><h3 id="edit-title">좋은 구간만 남겨요</h3><button class="text-button" id="trim-silence" type="button">양끝 무음 줄이기 <span aria-hidden="true">↗</span></button></div>
+          <p class="editor-help">파형의 양끝을 움직이거나 아래 시간을 조절하세요. 문장 중간이 잘리지 않게 들어 보세요.</p>
+          <div class="trim-controls"><label>시작 <span class="time-input"><input id="start-time" type="number" min="0" step="0.01" aria-label="시작 시간, 초"><span>초</span></span><input id="start-range" type="range" min="0" step="0.01" aria-label="구간 시작"></label><span class="trim-arrow" aria-hidden="true">→</span><label>끝 <span class="time-input"><input id="end-time" type="number" min="0" step="0.01" aria-label="끝 시간, 초"><span>초</span></span><input id="end-range" type="range" min="0" step="0.01" aria-label="구간 끝"></label></div>
+          <div class="playback-row"><button id="play-button" class="play-button" type="button"><span id="play-icon" aria-hidden="true">▶</span><span id="play-label">선택 구간 듣기</span></button><p>선택한 길이 <strong id="selection-duration">0.00초</strong><span id="duration-badge" class="duration-badge"></span></p></div>
+          <p class="quality-note" id="quality-note"></p>
+        </section>
+      </section>
+
+      <aside class="prompt-card card" aria-labelledby="prompt-title">
+        <div class="card-heading"><div><p class="section-kicker">SOMETHING TO SAY</p><h2 id="prompt-title">이렇게 읽어 보세요</h2></div><span class="quote-mark" aria-hidden="true">“</span></div>
+        <div class="prompt-selects"><label>녹음 언어<select id="prompt-language"><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option></select></label><label>읽을 문장<select id="prompt-preset"><option value="standard">기본 문장</option><option value="short">짧은 문장</option><option value="custom">직접 입력</option></select></label></div>
+        <label class="transcript-label" for="transcript">참조 음성의 대사</label><textarea id="transcript" rows="6" spellcheck="false" maxlength="2000" placeholder="선택한 음성에서 실제로 말한 대사를 적어 주세요.">안녕하세요. 오늘은 날씨가 좋아서 잠깐 산책을 다녀왔어요. 시원한 바람이 불어서 기분이 한결 좋아졌네요.</textarea>
+        <p class="transcript-help" id="transcript-help">평소 말투로 문장 끝까지 또렷하게 읽어 주세요. 길면 짧은 문장으로 바꿔도 좋아요.</p>
+        <div class="reading-tips"><p><span aria-hidden="true">✦</span>더 자연스러운 목소리를 위해</p><ul><li>조용한 곳에서 마이크와 거리를 유지해요.</li><li>빠르게 읽거나 감정을 연기하지 않아도 돼요.</li><li>배경 음악 없이 한 사람의 목소리만 담아요.</li></ul></div>
+        <div class="local-note"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v3"/></svg><p>녹음과 편집은 이 기기에서만 이루어져요.<br><strong>음성은 서버에 전송되지 않아요.</strong></p></div>
+      </aside>
+    </div>
+
+    <section class="export-card" aria-labelledby="export-title">
+      <div class="export-intro"><span class="export-icon" aria-hidden="true">↧</span><div><p class="section-kicker">READY FOR YOUR NEXT STORY</p><h2 id="export-title">마음에 드는 목소리인가요?</h2><p id="export-help">녹음 후 3~10초 구간을 골라 저장하세요.</p></div></div>
+      <div class="export-actions"><button id="export-button" class="primary-button" type="button" disabled>참조 보이스 저장 <span aria-hidden="true">↗</span></button><span class="export-format">.pgvoice · 음성과 대사를 하나로</span></div>
+    </section>
+    <details class="technical-details"><summary>저장한 파일은 어떻게 사용하나요?</summary><p><code>.pgvoice</code>는 선택한 음성과 대사, 녹음 언어를 함께 담은 전용 참조 보이스 파일이에요. 이 형식을 지원하는 봇에서 가져올 수 있도록 준비된 파일입니다.</p><p>음성을 잘랐다면 남은 구간에서 실제로 말한 내용과 대사가 일치하는지 확인하세요. 음성은 32 kHz, 모노, 16-bit PCM WAV로 담겨요. 이 페이지는 녹음·편집·파일 저장을 제공하며, Discord 봇에서 파일을 받는 기능은 아직 연결되지 않았어요.</p><pre id="metadata-preview" aria-label="GPT-SoVITS에 전달할 참조 음성 설정 예시"></pre></details>
+    <footer class="site-footer"><span>작은 녹음으로 시작하는, 나다운 목소리.</span><span>VOICE STUDIO <span aria-hidden="true">/</span> MADE FOR YOUR VOICE</span></footer>
+  </main>
+  <noscript><p class="wrap notice">녹음과 편집을 사용하려면 브라우저에서 JavaScript를 켜 주세요.</p></noscript>
+</body>
+</html>

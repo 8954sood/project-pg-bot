@@ -1,5 +1,41 @@
 # project-pg-bot
 
+## 실행 환경과 의존성
+
+Python **3.11 이상**을 사용하며, 로컬 검증 환경은 Python 3.12입니다. 2026-11-13 기준 호환 가능한 안정 버전으로 직접·간접 Python 의존성을 갱신했습니다. `constraints.txt`는 실제 검증한 버전을 고정하며, 선택 기능이나 개발 패키지를 설치 대상으로 추가하지는 않습니다.
+
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+python -m pip check
+pytest
+```
+
+주요 갱신은 Pillow 13.0.0, python-dotenv 1.2.4, websockets 17.4, pytest 9.2.0, pytest-asyncio 1.5.0, aiohttp 3.14.5, davey 0.2.0입니다. discord.py 2.7.1, aiosqlite 0.22.1, gTTS 2.5.4와 발음 전처리 패키지는 이미 최신 버전이라 유지했습니다. discord.py의 `PyNaCl < 1.6`, gTTS의 `click < 8.2` 조건 때문에 두 의존성은 각각 1.5.0과 8.1.8로 유지합니다. Python 3.10 지원 종료는 [websockets 17 변경 사항](https://websockets.readthedocs.io/en/stable/project/changelog.html)과 [Pillow 13 변경 사항](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html#python-3-10)을 참고하세요.
+
+## Voice Studio 정적 웹
+
+`web/voice-reference/`는 빌드나 서버 API 없이 GitHub Pages에 올릴 수 있는 참조 보이스 제작 도구입니다. 마이크 녹음, 기존 음성 가져오기, 파형 구간 선택, 양끝 무음 줄이기, 미리 듣기를 지원합니다. 한국어·영어·일본어의 기본/짧은 문장을 고르거나 직접 대사를 수정할 수 있습니다. 음성과 대사는 서버에 전송하거나 브라우저 저장소에 영구 보관하지 않습니다.
+
+저장은 선택한 음성과 실제 대사·녹음 언어를 묶은 전용 **`.pgvoice` 파일**로 합니다. 참조 구간은 3~10초로 제한하며 WAV는 32 kHz, 모노, 16-bit PCM으로 변환합니다. 최대 녹음은 30초, 가져올 파일은 20 MB·2분 이하입니다. 마이크는 HTTPS 또는 localhost에서 사용할 수 있습니다. 브라우저가 디코딩할 수 없는 파일은 읽을 수 없다는 안내를 표시합니다.
+
+```bash
+source .venv/bin/activate
+python -m http.server 8765 --bind 127.0.0.1
+# http://127.0.0.1:8765/web/voice-reference/
+```
+
+GitHub 저장소의 **Settings → Pages → Build and deployment → Source: GitHub Actions**를 선택하세요. `.github/workflows/voice-reference-pages.yml`이 관련 파일의 `main` 변경 또는 수동 실행 시 JavaScript 테스트를 통과한 뒤 `web/voice-reference/`만 배포합니다. PR에서는 검사만 수행합니다. 워크플로는 [GitHub Pages 공식 배포 방식](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)을 사용하며 별도 토큰이나 서비스 비밀키는 필요하지 않습니다. 자산 경로가 상대 경로라 프로젝트 Pages의 하위 경로에서도 작동합니다.
+
+```bash
+node --test tests/web/*.test.mjs
+```
+
+실제 마이크를 사용하지 않는 브라우저 오디오 검사는 로컬 서버의 `/tests/web/browser-audio.html`에서 실행할 수 있습니다. 합성 음성을 MediaStream으로 만들어 실제 MediaRecorder 녹음·디코딩·리샘플링·패키징을 검사하며 스피커에 연결하지 않습니다. 이 검사 페이지는 배포 대상 폴더 밖에 있습니다.
+
+`.pgvoice` 구조, 검증 규칙, 향후 봇에서 파일을 읽는 방법은 [참조 보이스 파일 형식 문서](docs/reference-voice-format.md)를 참고하세요. 현재는 웹의 파일 생성과 Core 검증 유틸까지 제공하며, Discord 파일 수신·유저 연결·GPT-SoVITS 서버 전송은 연결하지 않았습니다.
+
 ## Discord LLM 메모리 봇
 
 이 기능은 환경변수 `LLM_GUILD_CHANNEL_MAP`에 등록된 Discord 서버와 채널에서만 동작합니다. 형식은 `guild_id:channel_id,channel_id;guild_id:channel_id`입니다. 등록되지 않은 서버, 채널, DM, bot/webhook 메시지는 typing indicator, DB 저장, recent context, memory extraction, LLM 호출 대상이 아닙니다.

@@ -494,7 +494,7 @@ async def test_ai_end_before_first_chunk_cleans_up_ffmpeg(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websockets_15_connects_to_local_server(monkeypatch):
+async def test_websockets_connects_to_local_server(monkeypatch):
     received_requests = []
 
     async def handler(websocket, *args):
