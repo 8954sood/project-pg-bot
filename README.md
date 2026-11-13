@@ -14,6 +14,8 @@ pytest
 
 주요 갱신은 Pillow 13.0.0, python-dotenv 1.2.4, websockets 17.4, pytest 9.2.0, pytest-asyncio 1.5.0, aiohttp 3.14.5, davey 0.2.0입니다. discord.py 2.7.1, aiosqlite 0.22.1, gTTS 2.5.4와 발음 전처리 패키지는 이미 최신 버전이라 유지했습니다. discord.py의 `PyNaCl < 1.6`, gTTS의 `click < 8.2` 조건 때문에 두 의존성은 각각 1.5.0과 8.1.8로 유지합니다. Python 3.10 지원 종료는 [websockets 17 변경 사항](https://websockets.readthedocs.io/en/stable/project/changelog.html)과 [Pillow 13 변경 사항](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html#python-3-10)을 참고하세요.
 
+`Deprecated`는 Python 3.12 이상에서 3.0.1, Python 3.11에서는 해당 Python을 지원하는 최신 버전인 1.3.1을 사용하도록 환경 마커로 분리했습니다.
+
 ## Voice Studio 정적 웹
 
 `web/voice-reference/`는 빌드나 서버 API 없이 GitHub Pages에 올릴 수 있는 참조 보이스 제작 도구입니다. 마이크 녹음, 기존 음성 가져오기, 파형 구간 선택, 양끝 무음 줄이기, 미리 듣기를 지원합니다. 한국어·영어·일본어의 기본/짧은 문장을 고르거나 직접 대사를 수정할 수 있습니다. 음성과 대사는 서버에 전송하거나 브라우저 저장소에 영구 보관하지 않습니다.
