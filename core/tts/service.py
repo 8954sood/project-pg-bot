@@ -307,6 +307,16 @@ class TTSService:
             model_name=model_to_save,
         )
 
+    async def select_voice(self, user_id: int, style_id: str) -> str:
+        if not self.sovits.configured():
+            raise ValueError('GPT-SoVITS 서버가 설정되지 않았습니다.')
+        voices = await self.sovits.visible(user_id)
+        voice = next((voice for voice in voices if voice['style_id'] == style_id), None)
+        if not voice:
+            raise ValueError('이 보이스는 삭제되었거나 비공개로 변경되었습니다. 목록을 다시 열어주세요.')
+        await self.set_tts_engine_option(user_id=user_id, engine='sovits', model_name=style_id)
+        return voice['name']
+
     async def add_tts_engine_allow(self, user_id: int) -> None:
         await LocalCore.ttsEngineAllowDataSource.add(user_id)
         self.tts_engine_allow.add(user_id)

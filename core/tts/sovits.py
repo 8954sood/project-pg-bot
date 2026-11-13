@@ -3,12 +3,11 @@ import asyncio
 import logging
 import os
 import re
-import subprocess
 
 import aiohttp
 
 from core.local.tts.voice_store import VoiceStore
-from core.tts.engines.stream_source import FFmpegStdoutAudioSource
+from core.tts.engines.pcm_source import PCMStreamAudioSource
 from core.tts.emoji_normalizer import normalize_tts_emojis
 from core.tts.language import validate_language
 from core.tts.pronunciation import PronunciationPreprocessor
@@ -50,6 +49,12 @@ class SovitsService:
 
     async def visible(self, user_id):
         return [v for v in await self.store.all() if v['public'] or v['owner_id'] == user_id]
+
+    async def deletable(self, user_id, *, owner=False):
+        return [voice for voice in await self.store.all() if (
+            (voice['is_sample'] and owner)
+            or (not voice['is_sample'] and voice['owner_id'] == user_id)
+        )]
 
     async def register_package(self, user_id, name, data, *, filename, sample=False):
         """Only validated Voice Studio packages enter the Discord upload path.
@@ -141,8 +146,10 @@ class SovitsService:
 
     async def create_discord_source(self, *, text, model_name, user_id):
         await self.lock.acquire()
-        proc = None
+        source = None
         session = None
+        response = None
+        task = None
         try:
             voice = next((v for v in await self.visible(user_id) if v['style_id'] == model_name), None)
             if not voice:
@@ -151,49 +158,54 @@ class SovitsService:
             session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300, sock_read=120))
             response = await self._request(session, 'POST', '/v1/tts/stream', json={
                 'style_id': model_name, 'text': text, 'lang': voice['lang']})
-            first = await response.content.read(4096)
-            if not first:
-                raise RuntimeError('음성 서버가 빈 오디오를 반환했습니다.')
-            proc = subprocess.Popen(['ffmpeg', '-hide_banner', '-loglevel', 'error',
-                '-f', 's16le', '-ar', '48000', '-ac', '1', '-i', 'pipe:0',
-                '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
-            loop = asyncio.get_running_loop()
-
-            def write_all(data):
-                view = memoryview(data)
-                while view:
-                    written = proc.stdin.write(view)
-                    if not written:
-                        raise BrokenPipeError("ffmpeg stdin closed")
-                    view = view[written:]
+            expected = {
+                'X-Audio-Format': 's16le',
+                'X-Audio-Sample-Rate': '48000',
+                'X-Audio-Channels': '1',
+            }
+            if any(response.headers.get(key) != value for key, value in expected.items()):
+                raise RuntimeError('음성 서버의 PCM 오디오 형식이 올바르지 않습니다.')
+            source = PCMStreamAudioSource(asyncio.get_running_loop())
 
             async def feed():
+                error = None
                 try:
-                    await asyncio.to_thread(write_all, first)
                     async for chunk in response.content.iter_chunked(8192):
-                        await asyncio.to_thread(write_all, chunk)
+                        if not await asyncio.to_thread(source.write, chunk):
+                            break
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    error = exc
                     logger.exception('GPT-SoVITS stream interrupted')
                 finally:
+                    source.finish(error)
                     response.close()
-                    await session.close()
                     try:
-                        proc.stdin.close()
-                    except (BrokenPipeError, OSError, ValueError):
-                        pass
-                    self.lock.release()
+                        await session.close()
+                    finally:
+                        self.lock.release()
 
             task = asyncio.create_task(feed())
-            return FFmpegStdoutAudioSource(proc, feed_task=task, loop=loop)
+            source.feed_task = task
+            # Do not mark Discord as speaking until a playable frame exists.
+            await source.wait_ready()
+            logger.info('GPT-SoVITS PCM playback ready', extra={
+                'user_id': user_id, 'style_id': model_name,
+                'audio_format': 's16le', 'sample_rate': 48000,
+            })
+            return source
         except BaseException:
-            if session:
-                await session.close()
-            if proc:
-                FFmpegStdoutAudioSource(proc).cleanup()
-            self.lock.release()
+            if source:
+                source.cleanup()
+            if task:
+                await asyncio.gather(task, return_exceptions=True)
+            else:
+                if response is not None:
+                    response.close()
+                if session:
+                    await session.close()
+                self.lock.release()
             raise
 
     async def prepare_text(self, text, language):

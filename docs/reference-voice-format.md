@@ -65,7 +65,7 @@ else:
     prompt_lang = voice.prompt_lang
 ```
 
-봇의 `/보이스등록`과 `/샘플보이스등록`은 `.pgvoice`만 수신하고 `SovitsService.register_package()`에서 이 검증을 통과한 `ReferenceVoice`를 처리합니다. 저장할 때는 Discord 사용자 ID 등에 기반해 서버가 정한 경로를 사용하세요. 패키지의 파일 경로를 추출하거나 저장 경로로 사용하지 않습니다.
+봇의 `/보이스등록`과 `/샘플보이스등록` 모달은 제작 안내·이름 입력·파일 첨부를 함께 표시하고 `.pgvoice`만 수신하며 `SovitsService.register_package()`에서 이 검증을 통과한 `ReferenceVoice`를 처리합니다. 저장할 때는 Discord 사용자 ID 등에 기반해 서버가 정한 경로를 사용하세요. 패키지의 파일 경로를 추출하거나 저장 경로로 사용하지 않습니다.
 
 검증 항목:
 
