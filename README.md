@@ -158,3 +158,39 @@ python -m pytest tests/core/tts -q
 ```
 
 사용한 백엔드 문서: [koroman Python API](https://github.com/gerosyab/koroman#-getting-started), [pykakasi convert API](https://pykakasi.readthedocs.io/en/latest/api.html), [CMUdict](https://github.com/prosegrinder/python-cmudict).
+
+## TTS 이모지 전처리 유틸
+
+`core/tts/emoji_normalizer.py`의 `normalize_tts_emojis()`는 Discord 런타임이나 음성 엔진에 의존하지 않는 독립 유틸입니다. `requirements-pronunciation.txt`로 설치하는 [emoji 2.16.0](https://pypi.org/project/emoji/2.16.0/)의 내장 언어 데이터를 사용하므로 변환 중 네트워크 요청이 없습니다. 한국어(`ko`), 영어(`en`), 일본어(`ja`) 중 **TTS 모델의 목표 언어**를 지정하세요.
+
+```python
+from core.tts.emoji_normalizer import normalize_tts_emojis
+from core.tts.pronunciation import PronunciationPreprocessor
+
+assert normalize_tts_emojis("고마워 ❤️!", "ko") == "고마워 하트!"
+assert normalize_tts_emojis("❤️👍🏽", "en") == "heart thumbs up"
+assert normalize_tts_emojis("❤️👍🏽", "ja") == "ハート サムズアップ"
+assert normalize_tts_emojis("좋아요 <:pepe:123456789>", "ko") == "좋아요"
+assert normalize_tts_emojis("20% 할인! A+B=3 © ™ ↔", "ko") == "20% 할인! A+B=3 © ™ ↔"
+
+# 먼저 이모지를 처리하고, 남은 외국어를 기존 발음 유틸로 변환합니다.
+target = "ko"
+text = normalize_tts_emojis("test ❤️ <:pepe:123456789>", target)
+if text.strip():
+    result = PronunciationPreprocessor().prepare(text, target)
+    assert result.text == "테스트 하트"
+# 커스텀 이모지만 있는 입력은 빈 문자열이므로 합성을 생략할 수 있습니다.
+```
+
+처리 규칙:
+
+- Discord 커스텀 이모지 `<:name:ID>`, `<a:name:ID>`는 이름과 숫자를 읽지 않도록 제거합니다. 제거로 앞뒤 단어가 붙지 않게 공백을 둡니다.
+- 일반 유니코드 이모지는 목표 언어의 이름으로 바꿉니다. 하트·엄지 척·미소·손 흔들기 등 자주 쓰는 이모지는 짧은 이름을 사용하고, 나머지는 라이브러리의 내장 이름을 사용합니다. 반복 이모지는 각각 읽습니다.
+- 피부색은 생략합니다. 직업·가족·국기·지역 깃발 등 조합을 인식하며, 가족은 짧게 `가족`/`family`/`家族`으로 읽습니다. 키캡 `1️⃣`는 `1`, `#️⃣`는 `#`로 바꿉니다.
+- 일반 숫자와 문장부호·기호는 유지합니다. `©`, `™`, `↔`, `❤`, `☀`처럼 문자로도 쓰이는 기호는 그대로 두고, `©️`, `❤️`, `☀️`처럼 이모지 표시(VS16)가 붙은 경우에 이름으로 읽습니다. 문자 표시(VS15)를 명시한 입력은 유지합니다.
+- 치환이 있으면 수평 공백을 정리하며 CR/LF 줄바꿈은 유지합니다. 치환할 항목이 없으면 원문을 그대로 반환합니다. 제거 후 공백만 남으면 빈 문자열을 반환합니다.
+- 목표 언어 이름이 아직 없거나 비표준 ZWJ 조합의 기본 이름을 찾을 수 없으면 `이모지`/`emoji`/`絵文字`로 읽습니다. 라이브러리가 인식하지 못하는 신규 문자 자체는 보존합니다.
+
+이 함수는 나머지 문장을 번역하거나 발음을 치환하지 않습니다. 기존 봇 정규화와 `.pgvoice` 참조 대사에는 자동 적용되지 않습니다. 참조 대사는 실제 녹음 내용과 일치하게 유지해야 합니다. 최초 호출에서 필요한 언어 데이터만 로드해 재사용하며, 사용자 메시지 전체를 캐시하지 않습니다.
+
+검증 명령: `python -m pytest tests/core/tts/test_emoji_normalizer.py -q`. 라이브러리 API와 데이터 설명은 [공식 문서](https://carpedm20.github.io/emoji/docs/index.html)를 참고하세요.
