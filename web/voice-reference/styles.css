@@ -340,6 +340,9 @@ button:not(:disabled):active{
   width:100%;
   height:calc(100% - 87px);
   touch-action:none;
+  cursor:default
+}
+.wave-panel.has-audio canvas{
   cursor:col-resize
 }
 .wave-empty{
@@ -356,19 +359,10 @@ button:not(:disabled):active{
   color:#83a091;
   margin:14px 0 0
 }
-.mic-orbit{
-  display:grid;
-  place-items:center;
-  width:68px;
-  height:68px;
-  border:1px solid #41614e;
-  border-radius:50%;
-  box-shadow:0 0 0 12px #41614e13
-}
-.mic-orbit svg{
-  width:25px;
-  height:25px;
-  stroke:#c8e3bb;
+.mic-hint{
+  width:32px;
+  height:32px;
+  stroke:#83a091;
   stroke-width:1.5;
   stroke-linecap:round;
   stroke-linejoin:round
