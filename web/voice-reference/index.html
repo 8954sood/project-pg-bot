@@ -9,7 +9,7 @@
   <title>Voice Studio · 내 목소리 준비하기</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
-  <script src="./app.mjs" type="module"></script>
+  <script src="./app.mjs?v=2" type="module"></script>
 </head>
 <body>
   <a class="skip-link" href="#studio">녹음 도구로 바로 가기</a>
@@ -39,7 +39,7 @@
         </div>
 
         <div class="record-actions"><button class="record-button" id="record-button" type="button"><span class="record-symbol" aria-hidden="true"></span><span id="record-button-label">녹음 시작</span></button><span class="or">또는</span><button class="upload-button" id="upload-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-4 4 4-4 4 4M5 15v5h14v-5"/></svg>음성 파일 가져오기</button><input id="file-input" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm,.flac" hidden></div>
-        <p class="record-footnote" id="record-footnote">마이크 권한은 녹음을 시작할 때만 요청해요.</p>
+        <p class="record-footnote" id="record-footnote">최소 3초 이상 녹음해 주세요.</p>
         <p class="notice" id="notice" role="status" aria-live="polite" hidden></p>
 
         <section class="editor" id="editor" aria-labelledby="edit-title" hidden>

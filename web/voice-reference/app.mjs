@@ -1,8 +1,8 @@
 import {
-  REFERENCE_RATE, MAX_FILE_BYTES, MAX_FILE_SECONDS, mixToMono, selectionFrames,
+  REFERENCE_RATE, MIN_REFERENCE_SECONDS, MAX_FILE_BYTES, MAX_FILE_SECONDS, mixToMono, selectionFrames,
   referenceIssues, audioStats, waveformPeaks, findSoundBounds, encodeWav, referenceMetadata,
 } from "./audio-utils.mjs";
-import { MicrophoneRecorder } from "./recorder.mjs?v=1";
+import { MicrophoneRecorder } from "./recorder.mjs?v=2";
 import { createVoicePackage } from "./voice-package.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -61,12 +61,19 @@ function selection() {
   return selectionFrames(state.start, state.end, state.buffer.sampleRate, state.buffer.length);
 }
 
+function updateRecordingControl() {
+  const recording = recorder.phase === "recording";
+  const occupied = recorder.phase !== "idle" || state.processing || state.exporting;
+  ui["record-button"].disabled = recording ? !recorder.canStop : occupied;
+  ui["record-button"].classList.toggle("recording", recording);
+  ui["record-button-label"].textContent = recording ? (recorder.canStop ? "녹음 마치기" : "최소 3초 녹음해 주세요") : recorder.phase === "requesting" ? "마이크 연결 중…" : state.processing ? "소리 불러오는 중…" : state.buffer ? "다시 녹음" : "녹음 시작";
+  if (recording) ui["record-footnote"].textContent = recorder.canStop ? "문장을 다 읽으면 ‘녹음 마치기’를 눌러 주세요." : "3초가 지나면 녹음을 마칠 수 있어요.";
+}
+
 function updateControls() {
   const recording = recorder.phase === "recording";
   const occupied = recorder.phase !== "idle" || state.processing || state.exporting;
-  ui["record-button"].disabled = occupied && !recording;
-  ui["record-button"].classList.toggle("recording", recording);
-  ui["record-button-label"].textContent = recording ? "녹음 마치기" : recorder.phase === "requesting" ? "마이크 연결 중…" : state.processing ? "소리 불러오는 중…" : state.buffer ? "다시 녹음" : "녹음 시작";
+  updateRecordingControl();
   ui["upload-button"].disabled = occupied;
   for (const id of ["prompt-language", "prompt-preset", "transcript"]) ui[id].disabled = occupied;
   for (const id of ["start-time", "end-time", "start-range", "end-range", "play-button", "trim-silence"]) ui[id].disabled = occupied || !state.buffer;
@@ -186,6 +193,7 @@ async function loadAudio(blob, { recorded = false, name = "가져온 음성" } =
     const buffer = await audioContext.decodeAudioData(await blob.arrayBuffer());
     if (state.destroyed) return;
     if (!buffer.length || !Number.isFinite(buffer.duration) || buffer.duration > MAX_FILE_SECONDS) throw new Error("2분 이하의 음성 파일을 골라 주세요.");
+    if (buffer.duration < MIN_REFERENCE_SECONDS) throw new Error("최소 3초 이상의 음성이 필요해요. 다시 녹음하거나 더 긴 음성 파일을 골라 주세요.");
     const samples = mixToMono(Array.from({ length: buffer.numberOfChannels }, (_, channel) => buffer.getChannelData(channel)));
     const mono = audioContext.createBuffer(1, samples.length, buffer.sampleRate);
     mono.copyToChannel(samples, 0);
@@ -215,18 +223,19 @@ async function loadAudio(blob, { recorded = false, name = "가져온 음성" } =
 
 const recorder = new MicrophoneRecorder({
   onState(phase) {
-    if (phase === "idle") ui["record-footnote"].textContent = "마이크 권한은 녹음을 시작할 때만 요청해요.";
+    if (phase === "idle") ui["record-footnote"].textContent = "최소 3초 이상 녹음해 주세요.";
     if (phase === "recording") {
+      ui["record-clock"].textContent = clockText(0);
       ui["source-label"].textContent = "● RECORDING";
       ui["source-duration"].textContent = "30초가 되면 자동으로 마쳐요";
       ui["wave-hint"].textContent = "평소 말투로 편안하게 읽어 주세요";
-      ui["record-footnote"].textContent = "문장을 다 읽으면 ‘녹음 마치기’를 눌러 주세요.";
     }
     updateControls(); drawWave();
   },
   onTick(seconds, samples) {
     state.live = samples;
     ui["record-clock"].textContent = clockText(seconds);
+    updateRecordingControl();
     drawWave();
   },
   onData(blob) { loadAudio(blob, { recorded: true }).catch((error) => notify(explainError(error), "error")); },
